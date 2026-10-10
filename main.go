@@ -1,6 +1,6 @@
 //go:build windows
 
-// Diablo Lazy Macro 桌面执行器：托盘常驻 + 全局热键 + 分享码导入/导出 + 图形化编辑器 + 日志。
+// Diablo Lazy Macro 桌面执行器：主窗口 + 托盘常驻 + 全局热键 + 分享码导入/导出 + 日志。
 // 支持暗黑破坏神4 / 暗黑破坏神3 / 暗黑破坏神2：重制版，各自独立配置。
 // 三条红线：不读游戏内存、不注入进程、不加载驱动；只合成键鼠输入，并且仅在目标游戏位于前台时发送。
 package main
@@ -72,11 +72,13 @@ func (s *runtimeState) apply(snap runtimeSnapshot) {
 }
 
 type app struct {
-	mw  *walk.MainWindow
+	mw  *walk.MainWindow // 隐藏的基础窗口：承载托盘与消息循环
 	ni  *walk.NotifyIcon
 	dir string
 	log *logx.Logger
 	st  *runtimeState
+
+	win *mainWindow // 程序主窗口（可见）
 
 	settings *store.Settings // 仅 UI 线程访问
 
@@ -86,9 +88,8 @@ type app struct {
 	subMenuProfile *walk.Menu
 	subMenuGame    *walk.Menu
 
-	logDlg    *walk.Dialog
-	logTe     *walk.TextEdit
-	editorDlg *walk.Dialog
+	logDlg *walk.Dialog
+	logTe  *walk.TextEdit
 
 	notifyMu   sync.Mutex
 	lastNotify time.Time
@@ -115,7 +116,7 @@ func main() {
 func newApp() (*app, error) {
 	mw, err := walk.NewMainWindow()
 	if err != nil {
-		return nil, fmt.Errorf("创建主窗口失败：%v", err)
+		return nil, fmt.Errorf("创建基础窗口失败：%v", err)
 	}
 	ni, err := walk.NewNotifyIcon(mw)
 	if err != nil {
@@ -150,16 +151,16 @@ func newApp() (*app, error) {
 	if err := a.rebuildMenu(); err != nil {
 		return nil, err
 	}
-	a.refreshTray()
+	a.refreshUI()
 	if err := ni.SetVisible(true); err != nil {
 		return nil, fmt.Errorf("显示托盘图标失败：%v", err)
 	}
+	a.wireTrayClicks()
 	a.startTicker()
 
-	if a.st.snapshot().Engine == nil {
-		if err := ni.ShowInfo(appName, "当前游戏还没有配置。\n右键托盘图标 →「编辑配置…」新建，或「从剪贴板导入分享码」。"); err != nil {
-			a.log.Printf("[托盘] 气泡提示失败：%v", err)
-		}
+	if err := a.createMainWindow(); err != nil {
+		a.log.Printf("[窗口] 创建失败，已退回托盘模式：%v", err)
+		walk.MsgBox(a.mw, appName, "打开主窗口失败（仍可通过托盘使用）：\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 	}
 	return a, nil
 }
@@ -179,9 +180,39 @@ func (a *app) run() int {
 	return a.mw.Run()
 }
 
+func (a *app) quitApp() {
+	a.log.Printf("退出主程序")
+	_ = a.mw.Close()
+}
+
+// owner 返回对话框应使用的宿主窗口（优先主窗口）。
+func (a *app) owner() walk.Form {
+	if a.win != nil && a.win.mw != nil {
+		return a.win.mw
+	}
+	return a.mw
+}
+
+// wireTrayClicks 让双击托盘图标打开主窗口。
+func (a *app) wireTrayClicks() {
+	var lastClick time.Time
+	a.ni.MouseDown().Attach(func(x, y int, button walk.MouseButton) {
+		if button != walk.LeftButton {
+			return
+		}
+		now := time.Now()
+		if now.Sub(lastClick) < 400*time.Millisecond {
+			lastClick = time.Time{}
+			a.showMainWindow()
+			return
+		}
+		lastClick = now
+	})
+}
+
 // confirmQuarantine 询问后隔离无法读取的文件；失败只记录，不影响本次会话继续运行。
 func (a *app) confirmQuarantine(name string, loadErr error) {
-	if walk.MsgBox(a.mw, appName, name+" 无法读取：\n"+loadErr.Error()+"\n\n要把它重命名保留（.bad-时间戳）并以默认状态继续吗？",
+	if walk.MsgBox(a.owner(), appName, name+" 无法读取：\n"+loadErr.Error()+"\n\n要把它重命名保留（.bad-时间戳）并以默认状态继续吗？",
 		walk.MsgBoxYesNo|walk.MsgBoxIconWarning) != walk.DlgCmdYes {
 		a.log.Printf("%s 无法读取，用户选择保留原文件（本次会话以默认状态继续）：%v", name, loadErr)
 		return
@@ -243,19 +274,19 @@ func (a *app) switchGame(gameID string) {
 	if err := a.loadGame(gameID); err != nil {
 		a.confirmQuarantine(store.ConfigFile(gameID), err)
 		if retryErr := a.loadGame(gameID); retryErr != nil {
-			walk.MsgBox(a.mw, appName, "切换游戏失败：\n"+retryErr.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
+			walk.MsgBox(a.owner(), appName, "切换游戏失败：\n"+retryErr.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 			return
 		}
 	}
 	a.settings.CurrentGame = gameID
 	if err := store.SaveSettings(a.dir, *a.settings); err != nil {
-		walk.MsgBox(a.mw, appName, "已切换游戏，但设置保存失败（下次启动会回到旧游戏）：\n"+err.Error(),
+		walk.MsgBox(a.owner(), appName, "已切换游戏，但设置保存失败（下次启动会回到旧游戏）：\n"+err.Error(),
 			walk.MsgBoxOK|walk.MsgBoxIconWarning)
 	}
 	if err := a.rebuildMenu(); err != nil {
 		a.log.Printf("[错误] 重建菜单失败：%v", err)
 	}
-	a.refreshTray()
+	a.afterStateChange()
 	a.log.Printf("切换到 %s（目标进程 %s）", gameDisplayName(gameID), a.targetProcessOf(gameID))
 }
 
@@ -282,6 +313,11 @@ func (a *app) rebuildMenu() error {
 	check(ver.SetText(fmt.Sprintf("%s v%s", appName, version)))
 	check(ver.SetEnabled(false))
 	check(menu.Actions().Add(ver))
+
+	showAct := walk.NewAction()
+	check(showAct.SetText("显示主窗口"))
+	showAct.Triggered().Attach(a.showMainWindow)
+	check(menu.Actions().Add(showAct))
 
 	a.toggleAction = walk.NewAction()
 	check(a.toggleAction.SetCheckable(true))
@@ -337,11 +373,6 @@ func (a *app) rebuildMenu() error {
 
 	check(menu.Actions().Add(walk.NewSeparatorAction()))
 
-	editAct := walk.NewAction()
-	check(editAct.SetText("编辑配置…"))
-	editAct.Triggered().Attach(a.openEditor)
-	check(menu.Actions().Add(editAct))
-
 	importAct := walk.NewAction()
 	check(importAct.SetText("从剪贴板导入分享码…"))
 	importAct.Triggered().Attach(a.importFromClipboard)
@@ -366,14 +397,14 @@ func (a *app) rebuildMenu() error {
 
 	quitAct := walk.NewAction()
 	check(quitAct.SetText("退出"))
-	quitAct.Triggered().Attach(func() { _ = a.mw.Close() })
+	quitAct.Triggered().Attach(a.quitApp)
 	check(menu.Actions().Add(quitAct))
 
 	return buildErr
 }
 
-// refreshTray 必须在 UI 线程调用。
-func (a *app) refreshTray() {
+// refreshUI 刷新托盘与主窗口的运行状态；必须在 UI 线程调用。
+func (a *app) refreshUI() {
 	snap := a.st.snapshot()
 
 	tip := fmt.Sprintf("%s v%s · %s", appName, version, gameDisplayName(a.settings.CurrentGame))
@@ -414,10 +445,21 @@ func (a *app) refreshTray() {
 			setActionChecked(act, i == current)
 		}
 	}
+	if a.win != nil {
+		a.win.refreshStatus()
+	}
 }
 
-func (a *app) refreshTrayAsync() {
-	a.mw.Synchronize(a.refreshTray)
+func (a *app) refreshUIAsync() {
+	a.mw.Synchronize(a.refreshUI)
+}
+
+// afterStateChange 在任何改变运行状态的动作后统一刷新界面。
+func (a *app) afterStateChange() {
+	a.refreshUI()
+	if a.win != nil {
+		a.win.loadFromState()
+	}
 }
 
 func setActionText(act *walk.Action, text string) {
@@ -435,24 +477,24 @@ func setActionChecked(act *walk.Action, checked bool) {
 func (a *app) toggleFromUI() {
 	snap := a.st.snapshot()
 	if snap.Engine == nil {
-		walk.MsgBox(a.mw, appName, "当前游戏还没有配置。\n\n右键托盘图标 →「编辑配置…」新建，或「从剪贴板导入分享码」。",
+		walk.MsgBox(a.owner(), appName, "当前游戏还没有配置。\n\n在主窗口里编辑规则并「保存并应用」，或从剪贴板导入分享码。",
 			walk.MsgBoxOK|walk.MsgBoxIconInformation)
 		return
 	}
-	a.log.Printf("[托盘] %s → %s", keys.Label(snap.ToggleVK), onOffText(snap.Engine.Toggle()))
-	a.refreshTray()
+	a.log.Printf("[切换] %s → %s", keys.Label(snap.ToggleVK), onOffText(snap.Engine.Toggle()))
+	a.refreshUI()
 }
 
 func (a *app) importFromClipboard() {
 	text, err := walk.Clipboard().Text()
 	if err != nil {
-		walk.MsgBox(a.mw, appName, "读取剪贴板失败：\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
+		walk.MsgBox(a.owner(), appName, "读取剪贴板失败：\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 		return
 	}
 	raw, parsed, err := config.Decode(text)
 	if err != nil {
 		a.log.Printf("[导入] 分享码无效：%v", err)
-		walk.MsgBox(a.mw, appName, "分享码无效：\n\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
+		walk.MsgBox(a.owner(), appName, "分享码无效：\n\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 		return
 	}
 
@@ -469,12 +511,12 @@ func (a *app) importFromClipboard() {
 			sb.WriteString("· " + w + "\n")
 		}
 	}
-	if walk.MsgBox(a.mw, "导入分享码", sb.String(), walk.MsgBoxYesNo|walk.MsgBoxIconInformation) != walk.DlgCmdYes {
+	if walk.MsgBox(a.owner(), "导入分享码", sb.String(), walk.MsgBoxYesNo|walk.MsgBoxIconInformation) != walk.DlgCmdYes {
 		return
 	}
 	if err := a.applyConfig(raw, parsed, 0); err != nil {
 		a.log.Printf("[导入] 应用失败：%v", err)
-		walk.MsgBox(a.mw, appName, "应用配置失败：\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
+		walk.MsgBox(a.owner(), appName, "应用配置失败：\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 		return
 	}
 	if err := a.ni.ShowInfo(appName, "配置已应用。\n进入游戏后按 "+keys.Label(parsed.ToggleVK)+" 启用宏。"); err != nil {
@@ -507,9 +549,9 @@ func (a *app) applyConfig(raw *config.Raw, parsed *config.Parsed, profileIdx int
 	}
 	a.st.apply(runtimeSnapshot{Engine: eng, Raw: raw, ToggleVK: parsed.ToggleVK, GameID: gameID, TargetProcess: target})
 	if err := a.rebuildMenu(); err != nil {
-		return err
+		a.log.Printf("[错误] 重建菜单失败：%v", err)
 	}
-	a.refreshTray()
+	a.afterStateChange()
 	a.log.Printf("已应用 %s 配置：%s（%d 个方案，启停键 %s）", gameDisplayName(gameID), raw.Name, len(parsed.Profiles), keys.Label(parsed.ToggleVK))
 	return nil
 }
@@ -520,31 +562,31 @@ func (a *app) switchProfile(i int) {
 		return
 	}
 	if err := snap.Engine.SetProfile(i); err != nil {
-		walk.MsgBox(a.mw, appName, "切换方案失败：\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
+		walk.MsgBox(a.owner(), appName, "切换方案失败：\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 		return
 	}
 	if err := store.Save(a.dir, store.ConfigFile(snap.GameID), store.Snapshot{Config: *snap.Raw, ProfileIdx: i}); err != nil {
-		walk.MsgBox(a.mw, appName, "方案已切换，但保存失败（下次启动会回到旧方案）：\n"+err.Error(),
+		walk.MsgBox(a.owner(), appName, "方案已切换，但保存失败（下次启动会回到旧方案）：\n"+err.Error(),
 			walk.MsgBoxOK|walk.MsgBoxIconWarning)
 	}
-	a.refreshTray()
-	a.log.Printf("[托盘] 切换方案 → %s", profileDisplayName(snap.Engine, i))
+	a.refreshUI()
+	a.log.Printf("[切换] 方案 → %s", profileDisplayName(snap.Engine, i))
 }
 
 func (a *app) exportToClipboard() {
 	snap := a.st.snapshot()
 	if snap.Raw == nil {
-		walk.MsgBox(a.mw, appName, "当前游戏还没有配置可导出。\n\n先用「编辑配置…」新建，或从剪贴板导入一段分享码。",
+		walk.MsgBox(a.owner(), appName, "当前游戏还没有配置可导出。\n\n在主窗口里编辑规则并「保存并应用」，或从剪贴板导入一段分享码。",
 			walk.MsgBoxOK|walk.MsgBoxIconInformation)
 		return
 	}
 	code, err := config.Encode(*snap.Raw)
 	if err != nil {
-		walk.MsgBox(a.mw, appName, "生成分享码失败：\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
+		walk.MsgBox(a.owner(), appName, "生成分享码失败：\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 		return
 	}
 	if err := walk.Clipboard().SetText(code); err != nil {
-		walk.MsgBox(a.mw, appName, "写入剪贴板失败：\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
+		walk.MsgBox(a.owner(), appName, "写入剪贴板失败：\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 		return
 	}
 	a.log.Printf("[导出] 分享码已复制（%d 字符，%s）", len(code), gameDisplayName(snap.GameID))
@@ -555,11 +597,11 @@ func (a *app) exportToClipboard() {
 
 func (a *app) openDataDir() {
 	if err := os.MkdirAll(a.dir, 0o755); err != nil {
-		walk.MsgBox(a.mw, appName, "创建目录失败：\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
+		walk.MsgBox(a.owner(), appName, "创建目录失败：\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 		return
 	}
 	if err := exec.Command("explorer", a.dir).Start(); err != nil {
-		walk.MsgBox(a.mw, appName, "打开目录失败：\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
+		walk.MsgBox(a.owner(), appName, "打开目录失败：\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 	}
 }
 
@@ -591,7 +633,7 @@ func (a *app) startTicker() {
 			if enabled := snap.Engine.Enabled(); enabled != lastEnabled || snap.Engine.ProfileIndex() != lastProfile {
 				lastEnabled = enabled
 				lastProfile = snap.Engine.ProfileIndex()
-				a.refreshTrayAsync()
+				a.refreshUIAsync()
 			}
 		}
 	}()
@@ -696,7 +738,7 @@ func describeRule(r config.ParsedRule) string {
 	panic("未知动作类型：" + string(r.Kind))
 }
 
-// describeRawRule 是编辑器中使用的宽容版描述：字段可能尚未填好，不做校验。
+// describeRawRule 是主窗口中使用的宽容版描述：字段可能尚未填好，不做校验。
 func describeRawRule(r config.RawRule) string {
 	trigger := "宏开启期间"
 	if strings.HasPrefix(r.Trigger, "h:") {
@@ -745,6 +787,24 @@ func gameDisplayName(id string) string {
 	return id
 }
 
+func gameNames() []string {
+	all := games.All()
+	names := make([]string, 0, len(all))
+	for _, g := range all {
+		names = append(names, g.Name)
+	}
+	return names
+}
+
+func gameIndex(id string) int {
+	for i, g := range games.All() {
+		if g.ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
 func onOffText(on bool) string {
 	if on {
 		return "已开启"
@@ -752,30 +812,12 @@ func onOffText(on bool) string {
 	return "已关闭"
 }
 
-// defaultConfig 是编辑器的起手模板：一个方案、一条「每 300ms 连点一次 1」。
+// defaultConfig 是新建配置的起手模板：一个方案、一条「每 300ms 连点一次 1」。
 func defaultConfig() config.Raw {
 	return config.Raw{
 		Version: config.Version,
 		Profiles: []config.RawProfile{
 			{Rules: []config.RawRule{{Trigger: "t", Action: "tap:1", IntervalMS: 300}}},
 		},
-	}
-}
-
-func (a *app) openEditor() {
-	snap := a.st.snapshot()
-	var raw config.Raw
-	if snap.Raw != nil {
-		raw = *snap.Raw
-	} else {
-		raw = defaultConfig()
-	}
-	profileIdx := 0
-	if snap.Engine != nil {
-		profileIdx = snap.Engine.ProfileIndex()
-	}
-	if err := a.showEditor(raw, profileIdx, a.targetProcessOf(a.settings.CurrentGame)); err != nil {
-		a.log.Printf("[编辑器] 打开失败：%v", err)
-		walk.MsgBox(a.mw, appName, "打开编辑器失败：\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 	}
 }
