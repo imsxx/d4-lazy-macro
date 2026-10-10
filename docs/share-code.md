@@ -17,7 +17,7 @@ D4LM1:eyJ2IjoxLCJuIjoi5YWJ55-b5rOV5biILemAn-WItyIsInRnIjoiRjEiLCJwIjpbXX0
 
 - **分享便利优先**：码要在 QQ 群、微信群、论坛、视频简介里传播，Base64 是大家熟悉的「分享码」形态；裸露的 JSON 在聊天场景里既显眼，又容易被输入法/富文本把引号搞坏
 - Base64url 字符集（`A-Za-z0-9-_`）不会被聊天工具识别为链接或触发格式化
-- 透明性由另外两个环节保证：网站配置器是所见即所得的图形界面；工具在**应用前会渲染一份人类可读摘要**（规则逐条翻译成人话）供用户核对
+- 透明性由工具侧保证：**应用前会渲染一份人类可读摘要**（规则逐条翻译成人话）供用户核对，导入后也可再次导出查看
 
 ## 字段
 
@@ -100,6 +100,6 @@ D4LM1:eyJ2IjoxLCJuIjoi5YWJ55-b5rOV5biILemAn-WItyIsImEiOiLmn5BCROS9nOiAhSIsInRnIj
 
 ## 实现约定
 
-- 工具（Go）：`internal/config` 负责解析、编码与校验（`json.Decoder` + `DisallowUnknownFields`），测试见 `internal/config/config_test.go`
-- 网站（浏览器）：同一份规则表实现生成态校验；生成前自动校验，不合法不允许导出
-- 键名 → 虚拟键码映射表以 `internal/keys` 为准；网站侧维护等价表，并用测试锁定两表一致
+- **生成与消费都在桌面工具内完成**：工具负责导出分享码（作者侧）与导入分享码（用户侧）；官网只做一页工具介绍，不承接分享码的生成或托管
+- 解析、编码与校验由 `internal/config` 实现（`json.Decoder` + `DisallowUnknownFields`，Fail Fast），测试见 `internal/config/config_test.go`
+- 键名 → 虚拟键码映射表以 `internal/keys` 为准；违规码的冲突提示（同键自触发）见 `internal/config/warnings.go`
