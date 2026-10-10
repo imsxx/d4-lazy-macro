@@ -3,3 +3,5 @@
 *.log
 .idea/
 .vscode/
+# 参考用的第三方源码，不纳入本仓库
+D3keyHelper/

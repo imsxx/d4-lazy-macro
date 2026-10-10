@@ -54,6 +54,7 @@ type Raw struct {
 // RawProfile 是一套可切换的规则集合的 JSON 形态。
 type RawProfile struct {
 	Name  string    `json:"n,omitempty"`
+	HK    string    `json:"hk,omitempty"` // 方案切换键（仅键盘键，可留空）
 	Rules []RawRule `json:"r"`
 }
 
@@ -73,10 +74,11 @@ type Parsed struct {
 	Profiles []ParsedProfile
 }
 
-// ParsedProfile 是解析后的方案。
+// ParsedProfile 是解析后的方案；SwitchVK == 0 表示未设置方案切换键。
 type ParsedProfile struct {
-	Name  string
-	Rules []ParsedRule
+	Name     string
+	SwitchVK uint16
+	Rules    []ParsedRule
 }
 
 // ParsedRule 是解析后的规则；HoldVK == 0 表示宏开启期间持续触发，否则为按住触发键。
@@ -212,6 +214,16 @@ func resolve(raw *Raw) (*Parsed, error) {
 			return nil, fmt.Errorf("方案 #%d 的规则数量必须在 1–%d 之间，实际 %d", pi+1, maxRulesPerProfile, len(rp.Rules))
 		}
 		pp := ParsedProfile{Name: rp.Name}
+		if hk := strings.TrimSpace(rp.HK); hk != "" {
+			vk, err := keys.Parse(hk)
+			if err != nil {
+				return nil, fmt.Errorf("方案 #%d 的切换键无效：%v", pi+1, err)
+			}
+			if keys.IsMouse(vk) {
+				return nil, fmt.Errorf("方案 #%d 的切换键不支持鼠标键（%s），请改用键盘键", pi+1, keys.Label(vk))
+			}
+			pp.SwitchVK = vk
+		}
 		for ri, rr := range rp.Rules {
 			rule, err := resolveRule(pi+1, ri+1, rr)
 			if err != nil {
@@ -233,7 +245,11 @@ func resolveRule(profileNo, ruleNo int, r RawRule) (*ParsedRule, error) {
 	case strings.EqualFold(trigger, "t"):
 		// HoldVK 保持零值：宏开启期间持续触发
 	case strings.HasPrefix(strings.ToLower(trigger), "h:"):
-		vk, err := keys.Parse(trigger[2:])
+		keyName := strings.TrimSpace(trigger[2:])
+		if keyName == "" {
+			return nil, fmt.Errorf("%s 的触发方式是「按住指定键」，但没有选择触发键", where)
+		}
+		vk, err := keys.Parse(keyName)
 		if err != nil {
 			return nil, fmt.Errorf("%s 的触发键无效：%v", where, err)
 		}
@@ -249,6 +265,9 @@ func resolveRule(profileNo, ruleNo int, r RawRule) (*ParsedRule, error) {
 	kind := ActionKind(strings.ToLower(strings.TrimSpace(kindRaw)))
 	switch kind {
 	case ActionTap, ActionOnce, ActionHold:
+		if strings.TrimSpace(arg) == "" {
+			return nil, fmt.Errorf("%s 的动作 %s 没有选择按键", where, kind)
+		}
 		vk, err := keys.Parse(arg)
 		if err != nil {
 			return nil, fmt.Errorf("%s 的动作键无效：%v", where, err)
@@ -260,7 +279,10 @@ func resolveRule(profileNo, ruleNo int, r RawRule) (*ParsedRule, error) {
 		if len(parts) < 1 || len(parts) > maxSequenceKeys {
 			return nil, fmt.Errorf("%s 的序列长度必须在 1–%d 之间，实际 %d", where, maxSequenceKeys, len(parts))
 		}
-		for _, p := range parts {
+		for i, p := range parts {
+			if strings.TrimSpace(p) == "" {
+				return nil, fmt.Errorf("%s 的序列第 %d 个按键为空", where, i+1)
+			}
 			vk, err := keys.Parse(p)
 			if err != nil {
 				return nil, fmt.Errorf("%s 的序列键无效：%v", where, err)

@@ -85,6 +85,8 @@ func TestParseRejectsInvalid(t *testing.T) {
 		"触发方式非法":   codeFromJSON(`{"v":1,"p":[{"r":[{"tg":"x","a":"tap:1","i":100}]}]}`),
 		"触发键非法":    codeFromJSON(`{"v":1,"p":[{"r":[{"tg":"h:??","a":"tap:1","i":100}]}]}`),
 		"启停键用鼠标":   codeFromJSON(`{"v":1,"tg":"LMB","p":[{"r":[` + valid + `]}]}`),
+		"切换键用鼠标":   codeFromJSON(`{"v":1,"p":[{"r":[` + valid + `],"hk":"X1"}]}`),
+		"切换键非法":    codeFromJSON(`{"v":1,"p":[{"r":[` + valid + `],"hk":"??"}]}`),
 		"名称过长":     codeFromJSON(`{"v":1,"n":"` + strings.Repeat("长", 25) + `","p":[{"r":[` + valid + `]}]}`),
 		"JSON 有尾巴": codeFromJSON(`{"v":1,"p":[{"r":[` + valid + `]}]}{}`),
 		"JSON 未闭合": codeFromJSON(`{"v":1,"p":[{"r":[` + valid),
@@ -103,7 +105,7 @@ func TestEncodeRoundTrip(t *testing.T) {
 		Author:  "作者",
 		Toggle:  "F8",
 		Profiles: []RawProfile{
-			{Name: "速刷", Rules: []RawRule{
+			{Name: "速刷", HK: "F2", Rules: []RawRule{
 				{Trigger: "t", Action: "tap:4", IntervalMS: 250},
 				{Trigger: "h:X1", Action: "seq:2,3", IntervalMS: 200},
 				{Trigger: "t", Action: "hold:RMB"},
@@ -120,6 +122,9 @@ func TestEncodeRoundTrip(t *testing.T) {
 	p := mustParse(t, code)
 	if p.ToggleVK != 0x77 || p.Name != "测试配置" {
 		t.Fatalf("回读解析错误：%+v", p)
+	}
+	if p.Profiles[0].SwitchVK != 0x71 {
+		t.Fatalf("方案切换键回读错误：0x%02X", p.Profiles[0].SwitchVK)
 	}
 	last := p.Profiles[0].Rules[2]
 	if last.Kind != ActionHold || last.Keys[0] != 0x02 {

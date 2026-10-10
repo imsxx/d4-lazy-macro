@@ -15,13 +15,14 @@
 | 阶段 | 内容 |
 | --- | --- |
 | Phase 0（已完成） | 输入探针：合成键鼠输入在游戏内生效、可配置触发键按住识别、前台窗口保护（2026-10-10 实测通过） |
-| Phase 1（已落地） | 执行器：**主窗口**（状态控制与规则编辑）+ 托盘常驻 + 全局热键 + 分享码导入/导出 + 应用前预览 + 多方案切换 + 日志窗口 + 多游戏独立配置 |
+| Phase 1（已落地） | 执行器：**主窗口**（状态控制与规则编辑，键位全部下拉选择）+ 托盘常驻 + 全局热键 + 分享码导入/导出 + 应用前预览 + 多方案（新建/复制/删除 + 每方案切换键）+ 日志窗口 + 多游戏独立配置 |
 | Phase 2 | 官网一页工具介绍（不承接分享码，生成与分发都在工具内完成） |
 
 ## 使用
 
 1. 双击桌面快捷方式「暗黑懒人宏」（或运行 `dist\diablolazymacro.exe`）：**主窗口打开，同时托盘常驻**。关闭窗口只是最小化到托盘，宏会继续运行；双击托盘图标可再次打开窗口
-2. 主窗口顶部：**选游戏**（暗黑4 / 暗黑3 / 暗黑2R，各自独立配置）、**开关宏**、**切方案**；中间图形化编辑规则，点「保存并应用」生效
+2. 主窗口顶部：**选游戏**（暗黑4 / 暗黑3 / 暗黑2R，各自独立配置）、**开关宏**、**切方案**；中间图形化编辑规则——键位全部是下拉选择（不需要记键名），点「保存并应用」生效
+   - **方案管理**：下拉切换方案，「新建方案 / 复制方案 / 删除方案」维护结构；每个方案还能指定一个**切换键**，游戏中按一下即可切到该方案，不必回桌面开窗口
 3. 进游戏，按 `F1` 启用宏（可在配置里改），再按一次停用；**只有目标游戏位于前台时才会发送按键**
 4. **导入分享码**：复制一段分享码 →「从剪贴板导入分享码」→ 核对预览 → 确认应用
 5. 作者侧：点「复制分享码」即可把配置发给别人（主窗口与托盘菜单都有）
@@ -64,9 +65,10 @@ go test ./...        # 单元测试（协议、引擎、存档、日志）
 go vet ./...         # 静态检查
 ```
 
-Windows 资源（Common Controls v6 清单，walk 托盘必需）由 `winres.json` 生成，产物已入库；改动后重新生成：
+Windows 资源（应用图标 + Common Controls v6 清单 + 版本信息）由 `winres.json` 生成，产物已入库；改动后重新生成：
 
 ```powershell
+go run ./tools/mkico -in 源图.png -out assets/icon.ico -png assets/icon.png   # 图标：去水印、圆角透明、多尺寸 ICO
 go run github.com/tc-hib/go-winres@latest make --in winres.json --out rsrc --arch amd64,arm64
 ```
 
@@ -75,8 +77,9 @@ go run github.com/tc-hib/go-winres@latest make --in winres.json --out rsrc --arc
 ## 项目结构
 
 ```
-main.go                     # 执行器入口：托盘、热键、分享码导入/导出、多游戏切换
+main.go                     # 执行器入口：托盘、热键、方案切换键、分享码导入/导出、多游戏切换
 window.go                   # 主窗口：状态控制、方案与规则编辑、导入导出入口
+keyitems.go                 # 键位下拉候选项与中文键名（界面用）
 logwindow.go                # 日志窗口（查看/复制上报）
 cmd/probe/main.go           # Phase 0 输入探针（回归验证用）
 internal/win32/             # Win32 封装：SendInput 键鼠合成、GetAsyncKeyState 轮询、前台窗口检测
@@ -86,7 +89,9 @@ internal/config/            # 分享码解析、编码、校验与冲突提示�
 internal/engine/            # 规则引擎：tap/seq/once/hold 状态机与卡键防护（纯逻辑，可测试）
 internal/store/             # 每游戏配置与工具设置的持久化
 internal/logx/              # 日志器：内存环形缓冲 + 文件落盘 + 轮转
-winres.json                 # Windows 资源定义（清单/版本），生成 rsrc_windows_*.syso
+assets/icon.png|icon.ico    # 应用图标（源图 + 多尺寸 ICO）
+tools/mkico/                # 图标工具：去水印、圆角透明、生成多尺寸 ICO
+winres.json                 # Windows 资源定义（图标/清单/版本信息），生成 rsrc_windows_*.syso
 docs/                       # 协议与测试文档
 ```
 

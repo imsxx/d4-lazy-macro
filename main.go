@@ -18,7 +18,6 @@ import (
 	"github.com/imsxx/diablo-lazy-macro/internal/config"
 	"github.com/imsxx/diablo-lazy-macro/internal/engine"
 	"github.com/imsxx/diablo-lazy-macro/internal/games"
-	"github.com/imsxx/diablo-lazy-macro/internal/keys"
 	"github.com/imsxx/diablo-lazy-macro/internal/logx"
 	"github.com/imsxx/diablo-lazy-macro/internal/store"
 	"github.com/imsxx/diablo-lazy-macro/internal/win32"
@@ -72,11 +71,12 @@ func (s *runtimeState) apply(snap runtimeSnapshot) {
 }
 
 type app struct {
-	mw  *walk.MainWindow // 隐藏的基础窗口：承载托盘与消息循环
-	ni  *walk.NotifyIcon
-	dir string
-	log *logx.Logger
-	st  *runtimeState
+	mw   *walk.MainWindow // 隐藏的基础窗口：承载托盘与消息循环
+	ni   *walk.NotifyIcon
+	icon *walk.Icon // 应用图标（取自 exe 资源，窗口与托盘共用）
+	dir  string
+	log  *logx.Logger
+	st   *runtimeState
 
 	win *mainWindow // 程序主窗口（可见）
 
@@ -133,6 +133,20 @@ func newApp() (*app, error) {
 	a := &app{mw: mw, ni: ni, dir: dir, log: logger, st: &runtimeState{}}
 	a.log.Printf("%s v%s 启动：%s/%s，数据目录 %s", appName, version, runtime.GOOS, runtime.GOARCH, dir)
 
+	// 图标取自 exe 资源（winres.json 的 RT_GROUP_ICON #1）；加载失败退回系统默认图标，不影响功能。
+	if icon, err := walk.NewIconFromResourceId(1); err == nil {
+		a.icon = icon
+		if err := a.mw.SetIcon(icon); err != nil {
+			a.log.Printf("[图标] 主窗口图标设置失败：%v", err)
+		}
+		if err := ni.SetIcon(icon); err != nil {
+			a.log.Printf("[图标] 托盘图标设置失败：%v", err)
+		}
+	} else {
+		a.icon = walk.IconApplication()
+		a.log.Printf("[图标] 资源图标加载失败，使用系统默认图标：%v", err)
+	}
+
 	settings, err := store.LoadSettings(dir)
 	if err != nil {
 		a.confirmQuarantine(store.SettingsFile, err)
@@ -170,8 +184,9 @@ func (a *app) run() int {
 		if eng := a.st.snapshot().Engine; eng != nil {
 			eng.ReleaseAll()
 		}
+		// 退出时托盘的消息窗口往往已随主窗口销毁，隐藏失败属预期，故只记一行、不打印 walk 的堆栈。
 		if err := a.ni.SetVisible(false); err != nil {
-			a.log.Printf("[托盘] 隐藏图标失败：%v", err)
+			fmt.Fprintln(os.Stderr, "[托盘] 退出时隐藏图标失败（可忽略）")
 		}
 		if err := a.log.Close(); err != nil {
 			fmt.Fprintln(os.Stderr, "[日志] 关闭失败：", err)
@@ -427,10 +442,10 @@ func (a *app) refreshUI() {
 			setActionText(a.toggleAction, "启用宏（先导入或新建配置）")
 			setActionChecked(a.toggleAction, false)
 		case snap.Engine.Enabled():
-			setActionText(a.toggleAction, fmt.Sprintf("停用宏（%s）", keys.Label(snap.ToggleVK)))
+			setActionText(a.toggleAction, fmt.Sprintf("停用宏（%s）", keyName(snap.ToggleVK)))
 			setActionChecked(a.toggleAction, true)
 		default:
-			setActionText(a.toggleAction, fmt.Sprintf("启用宏（%s）", keys.Label(snap.ToggleVK)))
+			setActionText(a.toggleAction, fmt.Sprintf("启用宏（%s）", keyName(snap.ToggleVK)))
 			setActionChecked(a.toggleAction, false)
 		}
 	}
@@ -481,7 +496,7 @@ func (a *app) toggleFromUI() {
 			walk.MsgBoxOK|walk.MsgBoxIconInformation)
 		return
 	}
-	a.log.Printf("[切换] %s → %s", keys.Label(snap.ToggleVK), onOffText(snap.Engine.Toggle()))
+	a.log.Printf("[切换] %s → %s", keyName(snap.ToggleVK), onOffText(snap.Engine.Toggle()))
 	a.refreshUI()
 }
 
@@ -519,7 +534,7 @@ func (a *app) importFromClipboard() {
 		walk.MsgBox(a.owner(), appName, "应用配置失败：\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 		return
 	}
-	if err := a.ni.ShowInfo(appName, "配置已应用。\n进入游戏后按 "+keys.Label(parsed.ToggleVK)+" 启用宏。"); err != nil {
+	if err := a.ni.ShowInfo(appName, "配置已应用。\n进入游戏后按 "+keyName(parsed.ToggleVK)+" 启用宏。"); err != nil {
 		a.log.Printf("[托盘] 气泡提示失败：%v", err)
 	}
 }
@@ -552,13 +567,16 @@ func (a *app) applyConfig(raw *config.Raw, parsed *config.Parsed, profileIdx int
 		a.log.Printf("[错误] 重建菜单失败：%v", err)
 	}
 	a.afterStateChange()
-	a.log.Printf("已应用 %s 配置：%s（%d 个方案，启停键 %s）", gameDisplayName(gameID), raw.Name, len(parsed.Profiles), keys.Label(parsed.ToggleVK))
+	a.log.Printf("已应用 %s 配置：%s（%d 个方案，启停键 %s）", gameDisplayName(gameID), raw.Name, len(parsed.Profiles), keyName(parsed.ToggleVK))
 	return nil
 }
 
 func (a *app) switchProfile(i int) {
 	snap := a.st.snapshot()
 	if snap.Engine == nil || snap.Raw == nil {
+		return
+	}
+	if snap.Engine.ProfileIndex() == i {
 		return
 	}
 	if err := snap.Engine.SetProfile(i); err != nil {
@@ -613,18 +631,36 @@ func (a *app) startTicker() {
 			prevToggle  bool
 			lastEnabled bool
 			lastProfile = -1
+			prevSwitch  []bool
 		)
 		for range ticker.C {
 			snap := a.st.snapshot()
 
 			pressed := snap.ToggleVK != 0 && win32.KeyPressed(snap.ToggleVK)
 			if pressed && !prevToggle && snap.Engine != nil {
-				a.log.Printf("[热键] %s → %s", keys.Label(snap.ToggleVK), onOffText(snap.Engine.Toggle()))
+				a.log.Printf("[热键] %s → %s", keyName(snap.ToggleVK), onOffText(snap.Engine.Toggle()))
 			}
 			prevToggle = pressed
 
 			if snap.Engine == nil {
 				continue
+			}
+			// 方案切换键：任一方案的切换键被按下即切到该方案（全局生效，与前台无关）
+			if n := snap.Engine.ProfileCount(); n > 0 {
+				if len(prevSwitch) != n {
+					prevSwitch = make([]bool, n)
+				}
+				current := snap.Engine.ProfileIndex()
+				for i := 0; i < n; i++ {
+					vk := snap.Engine.SwitchVK(i)
+					down := vk != 0 && win32.KeyPressed(vk)
+					if down && !prevSwitch[i] && i != current {
+						idx := i
+						a.log.Printf("[热键] %s → 切换方案 %s", keyName(vk), profileDisplayName(snap.Engine, idx))
+						a.mw.Synchronize(func() { a.switchProfile(idx) })
+					}
+					prevSwitch[i] = down
+				}
 			}
 			fg, err := win32.GetForegroundWindow()
 			foreground := err == nil && win32.MatchProcess(fg.ProcessName, snap.TargetProcess)
@@ -701,7 +737,7 @@ func (a *app) describeConfig(raw *config.Raw, parsed *config.Parsed) string {
 	if raw.Author != "" {
 		sb.WriteString("作者：" + raw.Author + "\n")
 	}
-	sb.WriteString("启停键：" + keys.Label(parsed.ToggleVK) + "\n")
+	sb.WriteString("启停键：" + keyName(parsed.ToggleVK) + "\n")
 	for i, prof := range parsed.Profiles {
 		name := prof.Name
 		if name == "" {
@@ -710,6 +746,9 @@ func (a *app) describeConfig(raw *config.Raw, parsed *config.Parsed) string {
 		mark := ""
 		if i == 0 {
 			mark = "（默认启用）"
+		}
+		if prof.SwitchVK != 0 {
+			mark += "（切换键 " + keyName(prof.SwitchVK) + "）"
 		}
 		sb.WriteString(fmt.Sprintf("\n%s%s\n", name, mark))
 		for _, r := range prof.Rules {
@@ -723,17 +762,17 @@ func (a *app) describeConfig(raw *config.Raw, parsed *config.Parsed) string {
 func describeRule(r config.ParsedRule) string {
 	trigger := "宏开启期间"
 	if r.HoldVK != 0 {
-		trigger = "按住 " + keys.Label(r.HoldVK) + " 时"
+		trigger = "按住 " + keyName(r.HoldVK) + " 时"
 	}
 	switch r.Kind {
 	case config.ActionTap:
-		return fmt.Sprintf("%s，每 %s 连点一次 %s", trigger, durationText(r.IntervalMS), keys.Label(r.Keys[0]))
+		return fmt.Sprintf("%s，每 %s 连点一次 %s", trigger, durationText(r.IntervalMS), keyName(r.Keys[0]))
 	case config.ActionSeq:
 		return fmt.Sprintf("%s，循环按 %s（每 %s 一次）", trigger, joinKeyLabels(r.Keys, " → "), durationText(r.IntervalMS))
 	case config.ActionOnce:
-		return fmt.Sprintf("%s，点击一次 %s", trigger, keys.Label(r.Keys[0]))
+		return fmt.Sprintf("%s，点击一次 %s", trigger, keyName(r.Keys[0]))
 	case config.ActionHold:
-		return fmt.Sprintf("%s，保持按住 %s 不放", trigger, keys.Label(r.Keys[0]))
+		return fmt.Sprintf("%s，保持按住 %s 不放", trigger, keyName(r.Keys[0]))
 	}
 	panic("未知动作类型：" + string(r.Kind))
 }
@@ -742,16 +781,28 @@ func describeRule(r config.ParsedRule) string {
 func describeRawRule(r config.RawRule) string {
 	trigger := "宏开启期间"
 	if strings.HasPrefix(r.Trigger, "h:") {
-		trigger = "按住 " + strings.TrimPrefix(r.Trigger, "h:")
+		trigger = "按住 " + keyNameOfToken(strings.TrimPrefix(r.Trigger, "h:")) + " 时"
 	}
-	action := r.Action
-	if action == "" {
-		action = "（未设置动作）"
+	detail := r.Action
+	if kind, arg, ok := strings.Cut(r.Action, ":"); ok {
+		switch kind {
+		case "tap":
+			detail = "连点 " + keyNameOfToken(arg)
+		case "seq":
+			detail = "序列 " + keySequenceNames(arg)
+		case "once":
+			detail = "单点 " + keyNameOfToken(arg)
+		case "hold":
+			detail = "按住不放 " + keyNameOfToken(arg)
+		}
+	}
+	if detail == "" {
+		detail = "（未设置动作）"
 	}
 	if r.IntervalMS > 0 {
-		return fmt.Sprintf("%s · %s · 每 %s", trigger, action, durationText(r.IntervalMS))
+		return fmt.Sprintf("%s · %s · 每 %s", trigger, detail, durationText(r.IntervalMS))
 	}
-	return fmt.Sprintf("%s · %s", trigger, action)
+	return fmt.Sprintf("%s · %s", trigger, detail)
 }
 
 func durationText(ms int) string {
@@ -768,7 +819,7 @@ func durationText(ms int) string {
 func joinKeyLabels(vks []uint16, sep string) string {
 	labels := make([]string, 0, len(vks))
 	for _, vk := range vks {
-		labels = append(labels, keys.Label(vk))
+		labels = append(labels, keyName(vk))
 	}
 	return strings.Join(labels, sep)
 }

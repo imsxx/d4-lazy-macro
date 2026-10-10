@@ -20,6 +20,7 @@ func (a *app) showLogWindow() {
 	err := decl.Dialog{
 		AssignTo: &dlg,
 		Title:    appName + " v" + version + " · 日志",
+		Icon:     a.icon,
 		MinSize:  decl.Size{Width: 860, Height: 480},
 		Layout:   decl.VBox{},
 		Children: []decl.Widget{
