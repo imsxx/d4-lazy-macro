@@ -15,8 +15,16 @@
 | 阶段 | 内容 |
 | --- | --- |
 | Phase 0（已完成） | 输入探针：合成键鼠输入在游戏内生效、可配置触发键按住识别、前台窗口保护（2026-10-10 实测通过） |
-| Phase 1（当前） | 执行器 MVP：托盘常驻 + 全局热键 + 剪贴板导入分享码 + 应用前预览 + 多方案切换 + 导出分享码 |
+| Phase 1（已落地最小可用版） | 执行器：托盘常驻 + 全局热键 + 剪贴板导入分享码 + 应用前预览 + 多方案切换 + 导出分享码；图形化编辑器与自定义键位后续开放 |
 | Phase 2 | 官网一页工具介绍（不承接分享码，生成与分发都在工具内完成） |
+
+## 使用
+
+1. 启动 `d4lazymacro.exe`，托盘出现图标。开箱默认总开关键为 `F1`（分享码里可以改）
+2. 拿到一段分享码后：**托盘右键 →「从剪贴板导入分享码…」→ 核对预览 → 确认应用**
+3. 进游戏，按 `F1` 启用宏，再按一次停用；**只有 `Diablo IV` 位于前台时才会发送按键**
+4. 多个方案：托盘右键 →「切换方案」；作者侧：**「复制当前分享码」**即可把配置发给别人
+5. 配置持久化在 `%APPDATA%\d4-lazy-macro\config.json`（托盘菜单可打开数据目录）
 
 ## Phase 0 验证结果（2026-10-10）
 
@@ -35,10 +43,17 @@
 ## 开发
 
 ```powershell
-go run .          # 运行 Phase 0 探针
+go run .          # 运行托盘执行器（开发构建带控制台，便于看日志）
+go run ./cmd/probe   # 运行 Phase 0 输入探针（回归验证用）
 go build ./...    # 构建
 go test ./...     # 单元测试（协议、引擎、存档）
 go vet ./...      # 静态检查
+```
+
+Windows 资源（Common Controls v6 清单，walk 托盘必需）由 `winres.json` 生成，产物已入库；改动后重新生成：
+
+```powershell
+go run github.com/tc-hib/go-winres@latest make --in winres.json --out rsrc --arch amd64,arm64
 ```
 
 探针用法与游戏内测试清单见 [docs/probe-checklist.md](docs/probe-checklist.md)。
@@ -46,13 +61,15 @@ go vet ./...      # 静态检查
 ## 项目结构
 
 ```
-main.go               # 当前为 Phase 0 探针入口；MVP 落地后迁移至 cmd/probe，根入口变为执行器
-internal/win32/       # Win32 封装：SendInput 键鼠合成、GetAsyncKeyState 轮询、前台窗口检测
-internal/keys/        # 协议键名白名单与虚拟键码互转
-internal/config/      # 分享码解析、编码、校验与冲突提示（Fail Fast）
-internal/engine/      # 规则引擎：tap/seq/once/hold 状态机与卡键防护（纯逻辑，可测试）
-internal/store/       # 本地配置持久化（%APPDATA%\d4-lazy-macro）
-docs/                 # 协议与测试文档
+main.go                     # 执行器入口：托盘常驻 + 热键 + 分享码导入/导出
+cmd/probe/main.go           # Phase 0 输入探针（回归验证用）
+internal/win32/             # Win32 封装：SendInput 键鼠合成、GetAsyncKeyState 轮询、前台窗口检测
+internal/keys/              # 协议键名白名单与虚拟键码互转
+internal/config/            # 分享码解析、编码、校验与冲突提示（Fail Fast）
+internal/engine/            # 规则引擎：tap/seq/once/hold 状态机与卡键防护（纯逻辑，可测试）
+internal/store/             # 本地配置持久化（%APPDATA%\d4-lazy-macro）
+winres.json                 # Windows 资源定义（清单/版本），生成 rsrc_windows_*.syso
+docs/                       # 协议与测试文档
 ```
 
 ## 免责声明

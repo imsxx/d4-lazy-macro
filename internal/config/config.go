@@ -84,13 +84,29 @@ type ParsedRule struct {
 	IntervalMS int
 }
 
-// Parse 解析分享码。整段不合法即返回错误（Fail Fast）。
-func Parse(code string) (*Parsed, error) {
+// Decode 解析分享码，同时返回原始形态（用于持久化与再导出）与可执行形式。
+// 整段不合法即返回错误（Fail Fast）。
+func Decode(code string) (*Raw, *Parsed, error) {
 	raw, err := decode(code)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return resolve(raw)
+	parsed, err := resolve(raw)
+	if err != nil {
+		return nil, nil, err
+	}
+	return raw, parsed, nil
+}
+
+// Parse 仅需可执行形式时的便捷入口。
+func Parse(code string) (*Parsed, error) {
+	_, parsed, err := Decode(code)
+	return parsed, err
+}
+
+// Resolve 校验并解析原始形态（用于从本地存档恢复）。
+func Resolve(raw Raw) (*Parsed, error) {
+	return resolve(&raw)
 }
 
 // Encode 校验并编码分享码（用于导出与分享）。
