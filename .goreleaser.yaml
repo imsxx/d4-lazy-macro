@@ -1,0 +1,25 @@
+version: 2
+
+project_name: d4-lazy-macro
+
+builds:
+  - id: d4lazymacro
+    main: .
+    goos:
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
+archives:
+  - formats:
+      - zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksums:
+  name_template: checksums.txt
+
+changelog:
+  use: github-native
