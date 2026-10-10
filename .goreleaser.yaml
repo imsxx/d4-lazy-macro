@@ -5,6 +5,7 @@ project_name: diablo-lazy-macro
 builds:
   - id: diablolazymacro
     main: .
+    binary: diablolazymacro
     goos:
       - windows
     goarch:
