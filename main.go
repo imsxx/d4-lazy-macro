@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/imsxx/d4-lazy-macro/internal/keys"
 	"github.com/imsxx/d4-lazy-macro/internal/win32"
 )
 
@@ -40,7 +41,7 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	toggleVK, err := parseKey(*toggleKey)
+	toggleVK, err := keys.Parse(*toggleKey)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "解析 -toggle 失败：", err)
 		os.Exit(1)
@@ -62,7 +63,7 @@ func main() {
 	} else {
 		fmt.Printf("触发键（按住=连发）：%s\n", joinLabels(holdKeys))
 	}
-	fmt.Printf("连发序列：%s | 按住间隔：%dms | 启停键：%s\n", joinLabels(spamKeys), *holdIntervalMS, keyLabel(toggleVK))
+	fmt.Printf("连发序列：%s | 按住间隔：%dms | 启停键：%s\n", joinLabels(spamKeys), *holdIntervalMS, keys.Label(toggleVK))
 	fmt.Printf("自身权限：%s\n", adminText(selfAdmin))
 	fmt.Println("操作：按住任一触发键 = 连发；按启停键 = 持续连发开关；Ctrl+C 退出")
 	fmt.Println("说明：只有上面列出的触发键会在按下/松开时打印 [触发] 行，其余按键不会有任何输出。")
@@ -70,7 +71,7 @@ func main() {
 	for _, vk := range spamKeys {
 		for _, hk := range holdKeys {
 			if vk == hk {
-				fmt.Printf("[警告] 键 %s 同时在 -hold 和 -spam 里，会形成自我触发叠加，建议分开配置。\n", keyLabel(vk))
+				fmt.Printf("[警告] 键 %s 同时在 -hold 和 -spam 里，会形成自我触发叠加，建议分开配置。\n", keys.Label(vk))
 			}
 		}
 	}
@@ -109,9 +110,9 @@ func main() {
 			if down != prevHold[i] {
 				prevHold[i] = down
 				if down {
-					fmt.Printf("[触发] %s 按住\n", keyLabel(vk))
+					fmt.Printf("[触发] %s 按住\n", keys.Label(vk))
 				} else {
-					fmt.Printf("[触发] %s 松开\n", keyLabel(vk))
+					fmt.Printf("[触发] %s 松开\n", keys.Label(vk))
 				}
 			}
 			holdActive = holdActive || down
@@ -153,7 +154,7 @@ func main() {
 		if holdActive {
 			source = "按住"
 		}
-		fmt.Printf("[发送#%d|%s] %s\n", sentCount, source, keyLabel(vk))
+		fmt.Printf("[发送#%d|%s] %s\n", sentCount, source, keys.Label(vk))
 		if holdActive {
 			nextHold = now.Add(time.Duration(*holdIntervalMS) * time.Millisecond)
 		} else {
@@ -176,111 +177,29 @@ func onOff(on bool) string {
 	return "false"
 }
 
-// keyLabel 把虚拟键码转成可读名称，用于控制台输出。
-func keyLabel(vk uint16) string {
-	switch vk {
-	case win32.VKLeftMouse:
-		return "LMB"
-	case win32.VKRightMouse:
-		return "RMB"
-	case win32.VKMiddleMouse:
-		return "MMB"
-	case win32.VKXButton1:
-		return "X1"
-	case win32.VKXButton2:
-		return "X2"
-	}
-	if vk >= 0x70 && vk <= 0x7B {
-		return fmt.Sprintf("F%d", vk-0x6F)
-	}
-	if (vk >= 0x30 && vk <= 0x39) || (vk >= 0x41 && vk <= 0x5A) {
-		return string(rune(vk))
-	}
-	switch vk {
-	case 0x09:
-		return "TAB"
-	case 0x14:
-		return "CAPSLOCK"
-	case 0x1B:
-		return "ESC"
-	case 0x20:
-		return "SPACE"
-	}
-	return fmt.Sprintf("0x%02X", vk)
-}
-
-func joinLabels(keys []uint16) string {
-	labels := make([]string, 0, len(keys))
-	for _, vk := range keys {
-		labels = append(labels, keyLabel(vk))
+func joinLabels(vks []uint16) string {
+	labels := make([]string, 0, len(vks))
+	for _, vk := range vks {
+		labels = append(labels, keys.Label(vk))
 	}
 	return strings.Join(labels, ",")
 }
 
 func parseKeyList(list string) ([]uint16, error) {
-	var keys []uint16
+	var vks []uint16
 	for _, part := range strings.Split(list, ",") {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
 		}
-		vk, err := parseKey(part)
+		vk, err := keys.Parse(part)
 		if err != nil {
 			return nil, err
 		}
-		keys = append(keys, vk)
+		vks = append(vks, vk)
 	}
-	if len(keys) == 0 {
+	if len(vks) == 0 {
 		return nil, fmt.Errorf("列表为空")
 	}
-	return keys, nil
-}
-
-var namedKeys = map[string]uint16{
-	"LMB":      0x01,
-	"RMB":      0x02,
-	"MMB":      0x04,
-	"X1":       0x05,
-	"X2":       0x06,
-	"M4":       0x05,
-	"M5":       0x06,
-	"TAB":      0x09,
-	"ESC":      0x1B,
-	"SPACE":    0x20,
-	"CAPSLOCK": 0x14,
-	"F1":       0x70,
-	"F2":       0x71,
-	"F3":       0x72,
-	"F4":       0x73,
-	"F5":       0x74,
-	"F6":       0x75,
-	"F7":       0x76,
-	"F8":       0x77,
-	"F9":       0x78,
-	"F10":      0x79,
-	"F11":      0x7A,
-	"F12":      0x7B,
-}
-
-func parseKey(token string) (uint16, error) {
-	upper := strings.ToUpper(strings.TrimSpace(token))
-	if strings.HasPrefix(upper, "0X") {
-		var v uint16
-		if _, err := fmt.Sscanf(upper, "0X%x", &v); err != nil {
-			return 0, fmt.Errorf("无法解析按键 %q", token)
-		}
-		return v, nil
-	}
-	if vk, ok := namedKeys[upper]; ok {
-		return vk, nil
-	}
-	if len(upper) == 1 {
-		c := upper[0]
-		isDigit := c >= '0' && c <= '9'
-		isLetter := c >= 'A' && c <= 'Z'
-		if isDigit || isLetter {
-			return uint16(c), nil
-		}
-	}
-	return 0, fmt.Errorf("不支持的按键 %q（支持 0-9 / A-Z / LMB / RMB / MMB / X1 / X2 / F1-F12 / TAB / ESC / SPACE / 0xNN）", token)
+	return vks, nil
 }

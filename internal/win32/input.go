@@ -5,21 +5,13 @@ package win32
 import (
 	"fmt"
 	"unsafe"
+
+	"github.com/imsxx/d4-lazy-macro/internal/keys"
 )
 
 var (
 	procSendInput        = user32.NewProc("SendInput")
 	procGetAsyncKeyState = user32.NewProc("GetAsyncKeyState")
-)
-
-// 虚拟键码。鼠标键沿用对应 VK，便于轮询与配置统一。
-const (
-	VKLeftMouse   = 0x01
-	VKRightMouse  = 0x02
-	VKMiddleMouse = 0x04
-	VKXButton1    = 0x05 // 鼠标后退侧键
-	VKXButton2    = 0x06 // 鼠标前进侧键
-	VKF1          = 0x70
 )
 
 const (
@@ -89,40 +81,64 @@ func sendInput(in *input) error {
 	return nil
 }
 
-// TapKey 合成一次键盘按键：按下并抬起。
-func TapKey(vk uint16) error {
-	down := input{Type: inputKeyboard}
-	down.keybd().Vk = vk
-	if err := sendInput(&down); err != nil {
-		return err
-	}
-	up := input{Type: inputKeyboard}
-	up.keybd().Vk = vk
-	up.keybd().Flags = keyEventKeyUp
-	return sendInput(&up)
+// KeyDown 按下键盘键（不抬起）。
+func KeyDown(vk uint16) error {
+	in := input{Type: inputKeyboard}
+	in.keybd().Vk = vk
+	return sendInput(&in)
 }
 
-// TapMouse 合成一次鼠标点击（LMB / RMB / MMB / X1 / X2）：按下并抬起。
-func TapMouse(vk uint16) error {
-	downFlags, upFlags, data, err := mouseFlags(vk)
+// KeyUp 抬起键盘键。
+func KeyUp(vk uint16) error {
+	in := input{Type: inputKeyboard}
+	in.keybd().Vk = vk
+	in.keybd().Flags = keyEventKeyUp
+	return sendInput(&in)
+}
+
+// TapKey 合成一次键盘按键：按下并抬起。
+func TapKey(vk uint16) error {
+	if err := KeyDown(vk); err != nil {
+		return err
+	}
+	return KeyUp(vk)
+}
+
+// MouseDown 按下鼠标键（不抬起）。
+func MouseDown(vk uint16) error {
+	down, _, data, err := mouseFlags(vk)
 	if err != nil {
 		return err
 	}
-	down := input{Type: inputMouse}
-	down.mouse().MouseData = data
-	down.mouse().Flags = downFlags
-	if err := sendInput(&down); err != nil {
+	in := input{Type: inputMouse}
+	in.mouse().MouseData = data
+	in.mouse().Flags = down
+	return sendInput(&in)
+}
+
+// MouseUp 抬起鼠标键。
+func MouseUp(vk uint16) error {
+	_, up, data, err := mouseFlags(vk)
+	if err != nil {
 		return err
 	}
-	up := input{Type: inputMouse}
-	up.mouse().MouseData = data
-	up.mouse().Flags = upFlags
-	return sendInput(&up)
+	in := input{Type: inputMouse}
+	in.mouse().MouseData = data
+	in.mouse().Flags = up
+	return sendInput(&in)
+}
+
+// TapMouse 合成一次鼠标点击：按下并抬起。
+func TapMouse(vk uint16) error {
+	if err := MouseDown(vk); err != nil {
+		return err
+	}
+	return MouseUp(vk)
 }
 
 // Tap 按 VK 合成一次点击：鼠标键走鼠标事件，其余走键盘事件。
 func Tap(vk uint16) error {
-	if IsMouseVK(vk) {
+	if keys.IsMouse(vk) {
 		return TapMouse(vk)
 	}
 	return TapKey(vk)
@@ -130,24 +146,18 @@ func Tap(vk uint16) error {
 
 func mouseFlags(vk uint16) (down, up, data uint32, err error) {
 	switch vk {
-	case VKLeftMouse:
+	case keys.VKLeftMouse:
 		return mouseEventLeftDown, mouseEventLeftUp, 0, nil
-	case VKRightMouse:
+	case keys.VKRightMouse:
 		return mouseEventRightDown, mouseEventRightUp, 0, nil
-	case VKMiddleMouse:
+	case keys.VKMiddleMouse:
 		return mouseEventMiddleDown, mouseEventMiddleUp, 0, nil
-	case VKXButton1:
+	case keys.VKXButton1:
 		return mouseEventXDown, mouseEventXUp, 1, nil
-	case VKXButton2:
+	case keys.VKXButton2:
 		return mouseEventXDown, mouseEventXUp, 2, nil
 	}
 	return 0, 0, 0, fmt.Errorf("不支持的鼠标按键 VK 0x%02X", vk)
-}
-
-// IsMouseVK 判断 VK 是否对应鼠标按键。
-func IsMouseVK(vk uint16) bool {
-	_, _, _, err := mouseFlags(vk)
-	return err == nil
 }
 
 // KeyPressed 通过 GetAsyncKeyState 轮询按键（含鼠标各键）当前是否被按下。
