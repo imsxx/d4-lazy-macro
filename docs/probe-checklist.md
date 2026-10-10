@@ -7,7 +7,7 @@
 ## 基本用法
 
 ```powershell
-cd d:\GitHub\d4-lazy-macro
+cd d:\GitHub\diablo-lazy-macro
 go run ./cmd/probe
 ```
 

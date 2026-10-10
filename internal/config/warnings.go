@@ -3,7 +3,7 @@ package config
 import (
 	"fmt"
 
-	"github.com/imsxx/d4-lazy-macro/internal/keys"
+	"github.com/imsxx/diablo-lazy-macro/internal/keys"
 )
 
 // Warnings 返回配置中的可疑项（不阻断导入，仅用于导入时提示）。

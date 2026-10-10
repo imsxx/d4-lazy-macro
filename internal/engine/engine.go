@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/imsxx/d4-lazy-macro/internal/config"
+	"github.com/imsxx/diablo-lazy-macro/internal/config"
 )
 
 // Sender 负责实际合成输入（由 internal/win32 的实现注入）。

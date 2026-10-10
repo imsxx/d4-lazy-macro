@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/imsxx/d4-lazy-macro/internal/keys"
+	"github.com/imsxx/diablo-lazy-macro/internal/keys"
 )
 
 var (

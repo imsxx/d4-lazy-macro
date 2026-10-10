@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/imsxx/d4-lazy-macro/internal/config"
-	"github.com/imsxx/d4-lazy-macro/internal/keys"
+	"github.com/imsxx/diablo-lazy-macro/internal/config"
+	"github.com/imsxx/diablo-lazy-macro/internal/keys"
 )
 
 type fakeSender struct {

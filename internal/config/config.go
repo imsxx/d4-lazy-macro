@@ -11,12 +11,13 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/imsxx/d4-lazy-macro/internal/keys"
+	"github.com/imsxx/diablo-lazy-macro/internal/games"
+	"github.com/imsxx/diablo-lazy-macro/internal/keys"
 )
 
 const (
 	// Prefix 是分享码前缀，字母大小写不敏感；其后为 base64url 编码的紧凑 JSON。
-	Prefix = "D4LM1:"
+	Prefix = "DLM1:"
 	// Version 是当前协议版本。
 	Version = 1
 
@@ -43,6 +44,7 @@ const (
 // Raw 与分享码 JSON 一一对应，仅用于编解码。
 type Raw struct {
 	Version  int          `json:"v"`
+	Game     string       `json:"g,omitempty"`
 	Name     string       `json:"n,omitempty"`
 	Author   string       `json:"a,omitempty"`
 	Toggle   string       `json:"tg,omitempty"`
@@ -64,6 +66,7 @@ type RawRule struct {
 
 // Parsed 是校验并解析后的可执行形式。
 type Parsed struct {
+	Game     string
 	Name     string
 	Author   string
 	ToggleVK uint16
@@ -173,6 +176,11 @@ func resolve(raw *Raw) (*Parsed, error) {
 	if raw.Version != Version {
 		return nil, fmt.Errorf("分享码版本为 %d，本工具只支持版本 %d（请升级工具）", raw.Version, Version)
 	}
+	if raw.Game != "" {
+		if _, ok := games.Lookup(raw.Game); !ok {
+			return nil, fmt.Errorf("游戏标识 %q 无效（支持 %s）", raw.Game, gameIDList())
+		}
+	}
 	if err := checkName("配置名", raw.Name); err != nil {
 		return nil, err
 	}
@@ -195,7 +203,7 @@ func resolve(raw *Raw) (*Parsed, error) {
 	if len(raw.Profiles) < 1 || len(raw.Profiles) > maxProfiles {
 		return nil, fmt.Errorf("方案数量必须在 1–%d 之间，实际 %d", maxProfiles, len(raw.Profiles))
 	}
-	parsed := &Parsed{Name: raw.Name, Author: raw.Author, ToggleVK: toggleVK}
+	parsed := &Parsed{Game: raw.Game, Name: raw.Name, Author: raw.Author, ToggleVK: toggleVK}
 	for pi, rp := range raw.Profiles {
 		if err := checkName(fmt.Sprintf("方案 #%d 名称", pi+1), rp.Name); err != nil {
 			return nil, err
@@ -282,4 +290,12 @@ func checkName(field, name string) error {
 		return fmt.Errorf("%s 超过 %d 个字符上限", field, maxNameRunes)
 	}
 	return nil
+}
+
+func gameIDList() string {
+	ids := make([]string, 0, 4)
+	for _, g := range games.All() {
+		ids = append(ids, g.ID)
+	}
+	return strings.Join(ids, "/")
 }

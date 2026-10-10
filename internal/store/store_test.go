@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/imsxx/d4-lazy-macro/internal/config"
+	"github.com/imsxx/diablo-lazy-macro/internal/config"
 )
 
 func sampleSnapshot() Snapshot {
@@ -26,10 +26,10 @@ func sampleSnapshot() Snapshot {
 func TestSaveLoadRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	in := sampleSnapshot()
-	if err := Save(dir, in); err != nil {
+	if err := Save(dir, ConfigFile("d4"), in); err != nil {
 		t.Fatalf("Save 失败：%v", err)
 	}
-	out, err := Load(dir)
+	out, err := Load(dir, ConfigFile("d4"))
 	if err != nil {
 		t.Fatalf("Load 失败：%v", err)
 	}
@@ -44,8 +44,18 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 }
 
+func TestGamesUseSeparateFiles(t *testing.T) {
+	dir := t.TempDir()
+	if err := Save(dir, ConfigFile("d4"), sampleSnapshot()); err != nil {
+		t.Fatalf("Save d4 失败：%v", err)
+	}
+	if out, err := Load(dir, ConfigFile("d3")); err != nil || out != nil {
+		t.Fatalf("d3 不应读到 d4 的存档：%v %v", out, err)
+	}
+}
+
 func TestLoadMissingReturnsNil(t *testing.T) {
-	s, err := Load(t.TempDir())
+	s, err := Load(t.TempDir(), ConfigFile("d4"))
 	if err != nil {
 		t.Fatalf("Load 缺省目录应无错误：%v", err)
 	}
@@ -56,14 +66,14 @@ func TestLoadMissingReturnsNil(t *testing.T) {
 
 func TestLoadCorruptThenQuarantine(t *testing.T) {
 	dir := t.TempDir()
-	path := Path(dir)
+	path := Path(dir, ConfigFile("d4"))
 	if err := os.WriteFile(path, []byte("这不是 JSON"), 0o644); err != nil {
 		t.Fatalf("准备损坏文件失败：%v", err)
 	}
-	if _, err := Load(dir); err == nil {
+	if _, err := Load(dir, ConfigFile("d4")); err == nil {
 		t.Fatalf("损坏存档应当报错")
 	}
-	moved, err := Quarantine(dir)
+	moved, err := Quarantine(dir, ConfigFile("d4"))
 	if err != nil {
 		t.Fatalf("Quarantine 失败：%v", err)
 	}
@@ -73,7 +83,7 @@ func TestLoadCorruptThenQuarantine(t *testing.T) {
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("原存档应已被移走")
 	}
-	if s, err := Load(dir); err != nil || s != nil {
+	if s, err := Load(dir, ConfigFile("d4")); err != nil || s != nil {
 		t.Fatalf("隔离后应回到干净状态：%v %v", s, err)
 	}
 }
@@ -82,7 +92,7 @@ func TestSaveRejectsInvalid(t *testing.T) {
 	bad := Snapshot{Config: config.Raw{Version: 1, Profiles: []config.RawProfile{
 		{Rules: []config.RawRule{{Trigger: "t", Action: "tap:1", IntervalMS: 5}}},
 	}}}
-	if err := Save(t.TempDir(), bad); err == nil {
+	if err := Save(t.TempDir(), ConfigFile("d4"), bad); err == nil {
 		t.Fatalf("非法配置应当拒绝保存")
 	}
 }
@@ -90,11 +100,59 @@ func TestSaveRejectsInvalid(t *testing.T) {
 func TestLoadRejectsBadProfileIndex(t *testing.T) {
 	dir := t.TempDir()
 	content := `{"config":{"v":1,"p":[{"r":[{"tg":"t","a":"tap:1","i":100}]}]},"profile_index":5}`
-	if err := os.WriteFile(Path(dir), []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(Path(dir, ConfigFile("d4")), []byte(content), 0o644); err != nil {
 		t.Fatalf("准备文件失败：%v", err)
 	}
-	if _, err := Load(dir); err == nil {
+	if _, err := Load(dir, ConfigFile("d4")); err == nil {
 		t.Fatalf("越界方案序号应当报错")
+	}
+}
+
+func TestSettingsDefaultAndRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	s, err := LoadSettings(dir)
+	if err != nil {
+		t.Fatalf("缺省设置读取失败：%v", err)
+	}
+	if s.CurrentGame != "d4" {
+		t.Fatalf("默认当前游戏应为 d4，实际 %q", s.CurrentGame)
+	}
+	proc, err := s.TargetProcess("d4")
+	if err != nil || proc != "Diablo IV.exe" {
+		t.Fatalf("d4 默认进程不符：%q %v", proc, err)
+	}
+
+	s.CurrentGame = "d3"
+	s.Processes = map[string]string{"d3": "Diablo III.exe"}
+	if err := SaveSettings(dir, *s); err != nil {
+		t.Fatalf("SaveSettings 失败：%v", err)
+	}
+	out, err := LoadSettings(dir)
+	if err != nil {
+		t.Fatalf("回读设置失败：%v", err)
+	}
+	if out.CurrentGame != "d3" {
+		t.Fatalf("回读当前游戏不符：%q", out.CurrentGame)
+	}
+	proc, err = out.TargetProcess("d3")
+	if err != nil || proc != "Diablo III.exe" {
+		t.Fatalf("进程覆盖未生效：%q %v", proc, err)
+	}
+	if _, err := out.TargetProcess("d9"); err == nil {
+		t.Fatalf("未知游戏应当报错")
+	}
+}
+
+func TestLoadSettingsRejectsUnknownGame(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(Path(dir, SettingsFile), []byte(`{"current_game":"d9"}`), 0o644); err != nil {
+		t.Fatalf("准备文件失败：%v", err)
+	}
+	if _, err := LoadSettings(dir); err == nil {
+		t.Fatalf("未知当前游戏应当报错")
+	}
+	if err := SaveSettings(dir, Settings{CurrentGame: "d9"}); err == nil {
+		t.Fatalf("非法设置应当拒绝保存")
 	}
 }
 

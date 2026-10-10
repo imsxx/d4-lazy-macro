@@ -1,14 +1,14 @@
 # 分享码协议 v1
 
-> 状态：**v1 定稿**（2026-10-10）。这是「网站配置器」与「桌面执行器」之间**唯一的交换格式**：网站在浏览器内生成，工具在本地解析并应用。任何一方放宽校验都属于缺陷。
+> 状态：**v1 定稿**（2026-10-10，尚未对外分发）。这是「工具」内生成与消费的**唯一交换格式**：作者在工具内导出，玩家从剪贴板粘贴导入。任何一方放宽校验都属于缺陷。
 
 ## 形式
 
 ```
-D4LM1:eyJ2IjoxLCJuIjoi5YWJ55-b5rOV5biILemAn-WItyIsInRnIjoiRjEiLCJwIjpbXX0
+DLM1:eyJ2IjoxLCJnIjoiZDQiLCJuIjoi6aqM6K-B6YWN572uIiwicCI6W119
 ```
 
-- `D4LM1:` 为前缀（字母大小写不敏感），其后是 **base64url 编码**（RFC 4648 §5，无 `=` 填充）的紧凑 JSON
+- `DLM1:` 为前缀（字母大小写不敏感），其后是 **base64url 编码**（RFC 4648 §5，无 `=` 填充）的紧凑 JSON
 - 解析前先去掉前缀、剥离所有空白字符（换行/空格/制表符），因此聊天工具里被折行的码也能直接使用
 - 正文 JSON 的 `v` 字段必须为 `1`，且与前缀版本一致
 - 正文不含任何可执行内容；工具只读取白名单字段，绝不 eval
@@ -26,6 +26,7 @@ D4LM1:eyJ2IjoxLCJuIjoi5YWJ55-b5rOV5biILemAn-WItyIsInRnIjoiRjEiLCJwIjpbXX0
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
 | `v` | 是 | 协议版本，当前恒为 `1` |
+| `g` | 否 | 游戏标识：`d4` / `d3` / `d2r`；仅作提示，导入时与当前游戏不一致只提示不阻断 |
 | `n` | 否 | 配置名，≤ 24 字符 |
 | `a` | 否 | 作者署名，≤ 24 字符 |
 | `tg` | 否 | 全局启停键，默认 `F1`（不支持鼠标键） |
@@ -63,43 +64,43 @@ D4LM1:eyJ2IjoxLCJuIjoi5YWJ55-b5rOV5biILemAn-WItyIsInRnIjoiRjEiLCJwIjpbXX0
 ## 运行时语义（工具行为，不可由分享码配置）
 
 - **总开关**：`tg` 键（默认 `F1`）是主控。关闭时任何规则都不触发；开启后 `t` 规则持续运行，`h` 规则在按住时触发
-- **前台保护**：仅当目标进程（`Diablo IV.exe`）位于前台时发送；目标失去前台、宏关闭、程序退出时，**所有按住（`hold`）中的键立即释放**，避免按键卡死
-- **同键去重**：同一键同时作为触发与动作会形成自我叠加，工具启动时警告
-- **方案切换**：默认启用第一个方案，其余方案经托盘菜单切换（热键切换属后续版本）
+- **前台保护**：仅当目标游戏进程（可在编辑器里按游戏修改，默认见 README）位于前台时发送；目标失去前台、宏关闭、程序退出时，**所有按住（`hold`）中的键立即释放**，避免按键卡死
+- **同键去重**：同一键同时作为触发与动作会形成自我叠加，工具启动与保存时警告
+- **方案切换**：默认启用第一个方案，其余方案经托盘菜单切换
 
 ## 示例
 
 ```
-D4LM1:eyJ2IjoxLCJuIjoi5YWJ55-b5rOV5biILemAn-WItyIsImEiOiLmn5BCROS9nOiAhSIsInRnIjoiRjEiLCJwIjpbeyJuIjoi6YCf5Yi3IiwiciI6W3sidGciOiJ0IiwiYSI6InRhcDo0IiwiaSI6MjUwfSx7InRnIjoiaDpYMSIsImEiOiJzZXE6MiwzIiwiaSI6MjAwfSx7InRnIjoidCIsImEiOiJ0YXA6MyIsImkiOjMwMDAwfSx7InRnIjoidCIsImEiOiJob2xkOlJNQiJ9LHsidGciOiJoOlgyIiwiYSI6Im9uY2U6MSJ9XX1dfQ
+DLM1:eyJ2IjoxLCJnIjoiZDQiLCJuIjoi5YWJ55-b5rOV5biILemAn-WItyIsImEiOiLmn5BCROS9nOiAhSIsInRnIjoiRjEiLCJwIjpbeyJuIjoi6YCf5Yi3IiwiciI6W3sidGciOiJ0IiwiYSI6InRhcDo0IiwiaSI6MjUwfSx7InRnIjoiaDpYMSIsImEiOiJzZXE6MiwzIiwiaSI6MjAwfSx7InRnIjoidCIsImEiOiJ0YXA6MyIsImkiOjMwMDAwfSx7InRnIjoidCIsImEiOiJob2xkOlJNQiJ9LHsidGciOiJoOlgyIiwiYSI6Im9uY2U6MSJ9XX1dfQ
 ```
 
 解码后等价于：
 
 ```json
-{"v":1,"n":"光矛法师-速刷","a":"某BD作者","tg":"F1","p":[{"n":"速刷","r":[{"tg":"t","a":"tap:4","i":250},{"tg":"h:X1","a":"seq:2,3","i":200},{"tg":"t","a":"tap:3","i":30000},{"tg":"t","a":"hold:RMB"},{"tg":"h:X2","a":"once:1"}]}]}
+{"v":1,"g":"d4","n":"光矛法师-速刷","a":"某BD作者","tg":"F1","p":[{"n":"速刷","r":[{"tg":"t","a":"tap:4","i":250},{"tg":"h:X1","a":"seq:2,3","i":200},{"tg":"t","a":"tap:3","i":30000},{"tg":"t","a":"hold:RMB"},{"tg":"h:X2","a":"once:1"}]}]}
 ```
 
-读法：`F1` 开启后——每 250ms 连点技能 4；按住侧键 1 时循环按 2、3（间隔 200ms）；每 30 秒按一次技能 3 刷新 buff；全程按住右键不放（引导类技能）；每次按住侧键 2 时单点一次技能 1。
+读法：暗黑4 配置，`F1` 开启后——每 250ms 连点技能 4；按住侧键 1 时循环按 2、3（间隔 200ms）；每 30 秒按一次技能 3 刷新 buff；全程按住右键不放（引导类技能）；每次按住侧键 2 时单点一次技能 1。
 
 ## 校验规则（Fail Fast）
 
 工具解析时必须逐项校验；任何一条不满足即**整段拒绝**、给出明确错误，禁止部分应用、跳过非法项或静默降级：
 
-1. 前缀必须是 `D4LM1`（大小写不敏感），整码 ≤ 4096 字符
+1. 前缀必须是 `DLM1`（大小写不敏感），整码 ≤ 4096 字符
 2. 正文必须能按 base64url 解码（容忍 `=` 填充与空白字符），解码后 ≤ 3000 字节且为合法 UTF-8
 3. JSON 必须能解析、无未知字段、无多余尾巴
-4. `v` 必须等于 `1`，不匹配直接拒绝并提示升级
+4. `v` 必须等于 `1`，不匹配直接拒绝并提示升级；`g` 若出现必须在 `d4` / `d3` / `d2r` 之内
 5. `n` / `a` ≤ 24 字符；方案数 1–4；每方案规则数 1–8
 6. `tg` 只接受 `t` 或 `h:<合法键名>`；`a` 的动作类型与键名必须在白名单内，序列 ≤ 6 键
 7. `tap` / `seq` 的 `i` 必须在 [20, 600000]；`once` / `hold` 不允许出现 `i`
 
 ## 版本演进
 
-- 语义或字段变化 → 升版本（`D4LM2:`）；旧版工具遇到未知版本必须拒绝并提示升级
-- 工具声明支持的版本集合（v1 工具：`{1}`）；网站生成前必须校验，保证只产出工具能消费的版本
+- 语义或字段变化 → 升版本（`DLM2:`）；旧版工具遇到未知版本必须拒绝并提示升级
+- 工具声明支持的版本集合（v1 工具：`{1}`）
 
 ## 实现约定
 
 - **生成与消费都在桌面工具内完成**：工具负责导出分享码（作者侧）与导入分享码（用户侧）；官网只做一页工具介绍，不承接分享码的生成或托管
 - 解析、编码与校验由 `internal/config` 实现（`json.Decoder` + `DisallowUnknownFields`，Fail Fast），测试见 `internal/config/config_test.go`
-- 键名 → 虚拟键码映射表以 `internal/keys` 为准；违规码的冲突提示（同键自触发）见 `internal/config/warnings.go`
+- 键名 → 虚拟键码映射表以 `internal/keys` 为准；游戏标识表以 `internal/games` 为准

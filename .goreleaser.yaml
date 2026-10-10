@@ -1,9 +1,9 @@
 version: 2
 
-project_name: d4-lazy-macro
+project_name: diablo-lazy-macro
 
 builds:
-  - id: d4lazymacro
+  - id: diablolazymacro
     main: .
     goos:
       - windows

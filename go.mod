@@ -1,4 +1,4 @@
-module github.com/imsxx/d4-lazy-macro
+module github.com/imsxx/diablo-lazy-macro
 
 go 1.27.0
 

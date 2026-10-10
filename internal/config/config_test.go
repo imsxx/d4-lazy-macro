@@ -7,7 +7,7 @@ import (
 )
 
 // docExample 是 docs/share-code.md 中的示例码，必须始终可解析。
-const docExample = `D4LM1:eyJ2IjoxLCJuIjoi5YWJ55-b5rOV5biILemAn-WItyIsImEiOiLmn5BCROS9nOiAhSIsInRnIjoiRjEiLCJwIjpbeyJuIjoi6YCf5Yi3IiwiciI6W3sidGciOiJ0IiwiYSI6InRhcDo0IiwiaSI6MjUwfSx7InRnIjoiaDpYMSIsImEiOiJzZXE6MiwzIiwiaSI6MjAwfSx7InRnIjoidCIsImEiOiJ0YXA6MyIsImkiOjMwMDAwfSx7InRnIjoidCIsImEiOiJob2xkOlJNQiJ9LHsidGciOiJoOlgyIiwiYSI6Im9uY2U6MSJ9XX1dfQ`
+const docExample = `DLM1:eyJ2IjoxLCJnIjoiZDQiLCJuIjoi5YWJ55-b5rOV5biILemAn-WItyIsImEiOiLmn5BCROS9nOiAhSIsInRnIjoiRjEiLCJwIjpbeyJuIjoi6YCf5Yi3IiwiciI6W3sidGciOiJ0IiwiYSI6InRhcDo0IiwiaSI6MjUwfSx7InRnIjoiaDpYMSIsImEiOiJzZXE6MiwzIiwiaSI6MjAwfSx7InRnIjoidCIsImEiOiJ0YXA6MyIsImkiOjMwMDAwfSx7InRnIjoidCIsImEiOiJob2xkOlJNQiJ9LHsidGciOiJoOlgyIiwiYSI6Im9uY2U6MSJ9XX1dfQ`
 
 func mustParse(t *testing.T, code string) *Parsed {
 	t.Helper()
@@ -20,6 +20,9 @@ func mustParse(t *testing.T, code string) *Parsed {
 
 func TestParseDocExample(t *testing.T) {
 	p := mustParse(t, docExample)
+	if p.Game != "d4" {
+		t.Fatalf("游戏标识解析错误：%q", p.Game)
+	}
 	if p.Name != "光矛法师-速刷" || p.Author != "某BD作者" {
 		t.Fatalf("名称/作者解析错误：%q / %q", p.Name, p.Author)
 	}
@@ -50,7 +53,7 @@ func TestParseDocExample(t *testing.T) {
 
 func TestParseToleratesWhitespacePrefixCaseAndPadding(t *testing.T) {
 	payload := strings.TrimPrefix(docExample, Prefix)
-	messy := "d4lm1:" + payload[:20] + "\n\t " + payload[20:] + "=="
+	messy := "dlm1:" + payload[:20] + "\n\t " + payload[20:] + "=="
 	p := mustParse(t, messy)
 	if len(p.Profiles) != 1 || len(p.Profiles[0].Rules) != 5 {
 		t.Fatalf("容错解析结果错误：%+v", p)
@@ -69,6 +72,7 @@ func TestParseRejectsInvalid(t *testing.T) {
 		"前缀错误":     "D4LM2:" + strings.TrimPrefix(docExample, Prefix),
 		"非 Base64": Prefix + "不是base64!!",
 		"版本不符":     codeFromJSON(`{"v":2,"p":[{"r":[` + valid + `]}]}`),
+		"游戏标识非法":   codeFromJSON(`{"v":1,"g":"d5","p":[{"r":[` + valid + `]}]}`),
 		"未知字段":     codeFromJSON(`{"v":1,"x":1,"p":[{"r":[` + valid + `]}]}`),
 		"没有方案":     codeFromJSON(`{"v":1,"p":[]}`),
 		"方案没有规则":   codeFromJSON(`{"v":1,"p":[{"r":[]}]}`),
@@ -133,7 +137,7 @@ func TestEncodeRejectsInvalid(t *testing.T) {
 }
 
 func TestParseTwoProfileFixture(t *testing.T) {
-	const code = `D4LM1:eyJ2IjoxLCJuIjoi5Y-M5pa55qGI5rWL6K-VIiwidGciOiJGMSIsInAiOlt7Im4iOiLpgJ_liLciLCJyIjpbeyJ0ZyI6InQiLCJhIjoidGFwOjQiLCJpIjoyNTB9LHsidGciOiJoOlgxIiwiYSI6InNlcToyLDMiLCJpIjoyMDB9XX0seyJuIjoi5pS75Z2aIiwiciI6W3sidGciOiJ0IiwiYSI6ImhvbGQ6Uk1CIn0seyJ0ZyI6Img6WDIiLCJhIjoib25jZToxIn1dfV19`
+	const code = `DLM1:eyJ2IjoxLCJuIjoi5Y-M5pa55qGI5rWL6K-VIiwidGciOiJGMSIsInAiOlt7Im4iOiLpgJ_liLciLCJyIjpbeyJ0ZyI6InQiLCJhIjoidGFwOjQiLCJpIjoyNTB9LHsidGciOiJoOlgxIiwiYSI6InNlcToyLDMiLCJpIjoyMDB9XX0seyJuIjoi5pS75Z2aIiwiciI6W3sidGciOiJ0IiwiYSI6ImhvbGQ6Uk1CIn0seyJ0ZyI6Img6WDIiLCJhIjoib25jZToxIn1dfV19`
 	p := mustParse(t, code)
 	if len(p.Profiles) != 2 {
 		t.Fatalf("期望 2 个方案，实际 %d", len(p.Profiles))

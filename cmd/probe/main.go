@@ -1,6 +1,6 @@
 //go:build windows
 
-// D4 Lazy Macro · Phase 0 输入探针。
+// Diablo Lazy Macro · Phase 0 输入探针。
 // 验证三件事：合成输入在游戏内是否生效、触发键按住能否被轮询识别、前台窗口保护是否可靠。
 // 零钩子、零内存读取、零注入：只调用 SendInput 与 GetAsyncKeyState。
 package main
@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/imsxx/d4-lazy-macro/internal/keys"
-	"github.com/imsxx/d4-lazy-macro/internal/win32"
+	"github.com/imsxx/diablo-lazy-macro/internal/keys"
+	"github.com/imsxx/diablo-lazy-macro/internal/win32"
 )
 
 func main() {
@@ -56,7 +56,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Println("=== D4 Lazy Macro · Phase 0 输入探针 ===")
+	fmt.Println("=== Diablo Lazy Macro · Phase 0 输入探针 ===")
 	fmt.Printf("目标进程：%s\n", *target)
 	if len(holdKeys) == 0 {
 		fmt.Println("触发键（按住=连发）：无（只测启停键）")
