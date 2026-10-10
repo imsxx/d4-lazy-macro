@@ -131,3 +131,20 @@ func TestEncodeRejectsInvalid(t *testing.T) {
 		t.Fatalf("非法配置应当拒绝编码")
 	}
 }
+
+func TestParseTwoProfileFixture(t *testing.T) {
+	const code = `D4LM1:eyJ2IjoxLCJuIjoi5Y-M5pa55qGI5rWL6K-VIiwidGciOiJGMSIsInAiOlt7Im4iOiLpgJ_liLciLCJyIjpbeyJ0ZyI6InQiLCJhIjoidGFwOjQiLCJpIjoyNTB9LHsidGciOiJoOlgxIiwiYSI6InNlcToyLDMiLCJpIjoyMDB9XX0seyJuIjoi5pS75Z2aIiwiciI6W3sidGciOiJ0IiwiYSI6ImhvbGQ6Uk1CIn0seyJ0ZyI6Img6WDIiLCJhIjoib25jZToxIn1dfV19`
+	p := mustParse(t, code)
+	if len(p.Profiles) != 2 {
+		t.Fatalf("期望 2 个方案，实际 %d", len(p.Profiles))
+	}
+	if p.Profiles[0].Name != "速刷" || p.Profiles[1].Name != "攻坚" {
+		t.Fatalf("方案名解析错误：%q / %q", p.Profiles[0].Name, p.Profiles[1].Name)
+	}
+	if p.Profiles[1].Rules[0].Kind != ActionHold || p.Profiles[1].Rules[0].Keys[0] != 0x02 {
+		t.Fatalf("攻坚方案按住右键规则解析错误：%+v", p.Profiles[1].Rules[0])
+	}
+	if p.Profiles[1].Rules[1].Kind != ActionOnce || p.Profiles[1].Rules[1].HoldVK != 0x06 {
+		t.Fatalf("攻坚方案单点规则解析错误：%+v", p.Profiles[1].Rules[1])
+	}
+}
