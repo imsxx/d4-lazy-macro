@@ -10,7 +10,7 @@ import (
 const docExample = `DLM1:eyJ2IjoxLCJnIjoiZDQiLCJuIjoi5YWJ55-b5rOV5biILemAn-WItyIsImEiOiLmn5BCROS9nOiAhSIsInRnIjoiRjEiLCJwIjpbeyJuIjoi6YCf5Yi3IiwiciI6W3sidGciOiJ0IiwiYSI6InRhcDo0IiwiaSI6MjUwfSx7InRnIjoiaDpYMSIsImEiOiJzZXE6MiwzIiwiaSI6MjAwfSx7InRnIjoidCIsImEiOiJ0YXA6MyIsImkiOjMwMDAwfSx7InRnIjoidCIsImEiOiJob2xkOlJNQiJ9LHsidGciOiJoOlgyIiwiYSI6Im9uY2U6MSJ9XX1dfQ`
 
 // docExampleV2 是 docs/share-code.md 中的示例码（v2）：必须始终可解析。
-const docExampleV2 = `DLM2:eyJ2IjoyLCJnIjoiZDMiLCJuIjoi5pqX6buRMyDpgJ_liLciLCJhIjoi5p-QQkTkvZzogIUiLCJ0ZyI6IkYxIiwicCI6W3sibiI6IumAn-WItyIsInIiOlt7InRnIjoidCIsImEiOiJ0YXA6MiIsImkiOjMwMCwic3QiOjMsInByIjoxfSx7InRnIjoidCIsImEiOiJob2xkOlJNQiJ9LHsidGciOiJ0IiwiYSI6InRhcDoxIiwiaSI6MTUwLCJzdCI6MiwiZCI6LTQwLCJyZCI6dHJ1ZSwicnAiOjMsInJpIjo2MH1dfV19`
+const docExampleV2 = `DLM2:eyJ2IjoyLCJnIjoiZDMiLCJuIjoi5pqX6buRMyDpgJ_liLciLCJhIjoi5p-QQkTkvZzogIUiLCJ0ZyI6IkYxIiwicCI6W3sibiI6IumAn-WItyIsInIiOlt7InRnIjoidCIsImEiOiJ0YXA6MiIsImkiOjMwMCwic3QiOjN9LHsidGciOiJ0IiwiYSI6ImhvbGQ6Uk1CIn0seyJ0ZyI6InQiLCJhIjoidGFwOjEiLCJpIjoxNTAsInN0IjoyLCJkIjotNDAsInJkIjp0cnVlfV19XX0`
 
 // legacyPrefix 是 v1 前缀（仅测试使用）。
 const legacyPrefix = "DLM1:"
@@ -57,7 +57,7 @@ func TestParseDocExample(t *testing.T) {
 	}
 	// v1 码没有策略声明：全部为「未声明」，且不触发 Buff 守卫。
 	for i, r := range rules {
-		if r.Strategy != StrategyDisabled || r.Buff || r.DelayMS != 0 || r.Repeat != 0 || r.Priority != 0 {
+		if r.Strategy != StrategyDisabled || r.Buff || r.DelayMS != 0 || r.RandomDelay {
 			t.Fatalf("规则 %d 不应携带 v2 调参：%+v", i+1, r)
 		}
 	}
@@ -140,16 +140,15 @@ func TestParseDocExampleV2(t *testing.T) {
 	if len(rules) != 3 {
 		t.Fatalf("v2 示例规则数量错误：%d", len(rules))
 	}
-	if !rules[0].Buff || rules[0].Strategy != StrategyBuff || rules[0].Priority != 1 {
+	if !rules[0].Buff || rules[0].Strategy != StrategyBuff {
 		t.Fatalf("v2 示例保持Buff 规则解析错误：%+v", rules[0])
 	}
 	if rules[1].Kind != ActionHold || rules[1].Strategy != StrategyDisabled {
 		t.Fatalf("v2 示例按住规则解析错误：%+v", rules[1])
 	}
 	spam := rules[2]
-	if spam.Strategy != StrategySpam || spam.DelayMS != -40 || !spam.RandomDelay ||
-		spam.Repeat != 3 || spam.RepeatInterval != 60 {
-		t.Fatalf("v2 示例连点调参解析错误：%+v", spam)
+	if spam.Strategy != StrategySpam || spam.DelayMS != -40 || !spam.RandomDelay {
+		t.Fatalf("v2 示例连点延迟解析错误：%+v", spam)
 	}
 }
 
@@ -208,13 +207,13 @@ func TestParseRejectsInvalid(t *testing.T) {
 
 func TestParseV2TuningFields(t *testing.T) {
 	js := `{"v":2,"p":[{"r":[` +
-		`{"tg":"t","a":"tap:2","i":300,"st":3,"pr":5},` +
-		`{"tg":"t","a":"tap:1","i":1000,"st":2,"d":-40,"rd":true,"rp":3,"ri":60},` +
+		`{"tg":"t","a":"tap:2","i":300,"st":3},` +
+		`{"tg":"t","a":"tap:1","i":1000,"st":2,"d":-40,"rd":true},` +
 		`{"tg":"t","a":"hold:RMB","st":1}]}]}`
 	p := mustParse(t, codeFromJSON(js))
 	rules := p.Profiles[0].Rules
 
-	if rules[0].Strategy != StrategyBuff || !rules[0].Buff || rules[0].Priority != 5 {
+	if rules[0].Strategy != StrategyBuff || !rules[0].Buff {
 		t.Fatalf("保持Buff 规则解析错误：%+v", rules[0])
 	}
 	if rules[1].Strategy != StrategySpam || rules[1].Buff {
@@ -222,9 +221,6 @@ func TestParseV2TuningFields(t *testing.T) {
 	}
 	if rules[1].DelayMS != -40 || !rules[1].RandomDelay {
 		t.Fatalf("延迟与延迟随机解析错误：%+v", rules[1])
-	}
-	if rules[1].Repeat != 3 || rules[1].RepeatInterval != 60 {
-		t.Fatalf("重复次数/间隔解析错误：%+v", rules[1])
 	}
 	if rules[2].Strategy != StrategyHold || rules[2].Kind != ActionHold {
 		t.Fatalf("按住不放策略解析错误：%+v", rules[2])
@@ -238,17 +234,11 @@ func TestParseRejectsInvalidTuning(t *testing.T) {
 		"随机但无延迟":  `{"tg":"t","a":"tap:1","i":100,"rd":true}`,
 		"延迟用于序列":  `{"tg":"t","a":"seq:1,2","i":100,"d":50}`,
 		"延迟用于按住":  `{"tg":"t","a":"hold:RMB","d":50}`,
-		"重复次数为 1": `{"tg":"t","a":"tap:1","i":100,"rp":1,"ri":100}`,
-		"重复次数超上限": `{"tg":"t","a":"tap:1","i":100,"rp":21,"ri":100}`,
-		"重复间隔缺失":  `{"tg":"t","a":"tap:1","i":100,"rp":3}`,
-		"重复间隔却无次数": `{"tg":"t","a":"tap:1","i":100,"ri":100}`,
-		"重复间隔过小":  `{"tg":"t","a":"tap:1","i":100,"rp":3,"ri":5}`,
-		"重复用于按住":  `{"tg":"t","a":"hold:RMB","rp":3,"ri":100}`,
-		"优先级超上限":  `{"tg":"t","a":"tap:1","i":100,"st":3,"pr":7}`,
-		"优先级非保持Buff": `{"tg":"t","a":"tap:1","i":100,"st":2,"pr":3}`,
 		"策略超范围":   `{"tg":"t","a":"tap:1","i":100,"st":9}`,
 		"策略与动作不符": `{"tg":"t","a":"tap:1","i":100,"st":1}`,
-		"保持Buff带重复": `{"tg":"t","a":"tap:1","i":100,"st":3,"rp":2,"ri":50}`,
+		"已回收字段 rp": `{"tg":"t","a":"tap:1","i":100,"rp":3}`,
+		"已回收字段 ri": `{"tg":"t","a":"tap:1","i":100,"ri":60}`,
+		"已回收字段 pr": `{"tg":"t","a":"tap:1","i":100,"st":3,"pr":1}`,
 	}
 	for name, rule := range cases {
 		code := codeFromJSON(`{"v":2,"p":[{"r":[` + rule + `]}]}`)
@@ -269,8 +259,8 @@ func TestEncodeRoundTrip(t *testing.T) {
 				{Trigger: "t", Action: "tap:4", IntervalMS: 250},
 				{Trigger: "h:X1", Action: "seq:2,3", IntervalMS: 200},
 				{Trigger: "t", Action: "hold:RMB"},
-				{Trigger: "t", Action: "tap:2", IntervalMS: 300, Strategy: StrategyBuff, Priority: 4},
-				{Trigger: "t", Action: "tap:1", IntervalMS: 1000, Strategy: StrategySpam, DelayMS: 100, Repeat: 2, RepeatInterval: 50},
+				{Trigger: "t", Action: "tap:2", IntervalMS: 300, Strategy: StrategyBuff},
+				{Trigger: "t", Action: "tap:1", IntervalMS: 1000, Strategy: StrategySpam, DelayMS: 100, RandomDelay: true},
 			}},
 		},
 	}
@@ -292,11 +282,11 @@ func TestEncodeRoundTrip(t *testing.T) {
 	if last.Kind != ActionHold || last.Keys[0] != 0x02 {
 		t.Fatalf("回读动作解析错误：%+v", last)
 	}
-	if buff := p.Profiles[0].Rules[3]; !buff.Buff || buff.Priority != 4 {
-		t.Fatalf("回读保持Buff 调参错误：%+v", buff)
+	if buff := p.Profiles[0].Rules[3]; !buff.Buff {
+		t.Fatalf("回读保持Buff 策略错误：%+v", buff)
 	}
-	if spam := p.Profiles[0].Rules[4]; spam.DelayMS != 100 || spam.Repeat != 2 || spam.RepeatInterval != 50 {
-		t.Fatalf("回读连点调参错误：%+v", spam)
+	if spam := p.Profiles[0].Rules[4]; spam.DelayMS != 100 || !spam.RandomDelay {
+		t.Fatalf("回读连点延迟错误：%+v", spam)
 	}
 }
 

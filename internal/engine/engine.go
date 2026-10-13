@@ -59,7 +59,6 @@ type ruleState struct {
 	holding  bool
 	nextFire time.Time // 下一次连点周期的起点
 	fireAt   time.Time // 本周期内的实际发送时刻（叠加延迟偏移后）
-	burst    int       // 剩余连点次数；0 表示未处于爆发中
 	cursor   int
 }
 
@@ -216,8 +215,8 @@ func (e *Engine) Tick(now time.Time, foreground bool) {
 	}
 }
 
-// tickTapLocked 推进连点策略：周期起点 → 延迟偏移 → 连点爆发 → 周期推进。
-// 需要屏幕守卫时，若自身 Buff 仍在生效、或同方案存在优先级更高且仍在生效的 Buff，本轮整段让路。
+// tickTapLocked 推进连点策略：周期起点 → 延迟偏移 → 发送 → 周期推进。
+// 需要屏幕守卫时，若该技能 Buff 仍在生效，本轮让路、稍后重新采样。
 func (e *Engine) tickTapLocked(st *ruleState, now time.Time) {
 	if now.Before(st.nextFire) {
 		return
@@ -228,15 +227,8 @@ func (e *Engine) tickTapLocked(st *ruleState, now time.Time) {
 	if now.Before(st.fireAt) {
 		return
 	}
-	if st.burst <= 0 {
-		st.burst = st.rule.Repeat
-		if st.burst < 1 {
-			st.burst = 1
-		}
-	}
 	if e.buffGateLocked(st) {
-		// Buff 仍在生效：不按键、不消耗重复次数，稍后重新采样。
-		st.burst = 0
+		// Buff 仍在生效：不按键，稍后重新采样。
 		st.fireAt = time.Time{}
 		st.nextFire = now.Add(buffResampleDelay)
 		return
@@ -244,35 +236,13 @@ func (e *Engine) tickTapLocked(st *ruleState, now time.Time) {
 	if err := e.sender.Tap(st.rule.Keys[0]); err != nil {
 		e.onError(err)
 	}
-	st.burst--
-	if st.burst > 0 {
-		// 连点重复：按重复间隔继续爆发，周期起点保持不变。
-		st.fireAt = now.Add(e.repeatIntervalLocked(st.rule))
-		return
-	}
 	st.nextFire = now.Add(time.Duration(st.rule.IntervalMS) * time.Millisecond)
 	st.fireAt = time.Time{}
 }
 
-// buffGateLocked 判断本次连点是否应因 Buff 状态让路：
-// 自身 Buff 仍在生效，或同方案存在优先级更高且仍在生效的 Buff（复刻 D3keyHelper 的仲裁）。
+// buffGateLocked 判断本次连点是否应因「该技能 Buff 仍在生效」而让路。
 func (e *Engine) buffGateLocked(st *ruleState) bool {
-	if !st.rule.Buff || e.buffChecker == nil {
-		return false
-	}
-	if e.buffChecker(st.rule.Keys[0]) {
-		return true
-	}
-	for i := range e.rules {
-		other := &e.rules[i]
-		if other == st || !other.rule.Buff || other.rule.Priority <= st.rule.Priority {
-			continue
-		}
-		if e.buffChecker(other.rule.Keys[0]) {
-			return true
-		}
-	}
-	return false
+	return st.rule.Buff && e.buffChecker != nil && e.buffChecker(st.rule.Keys[0])
 }
 
 // delayOffsetLocked 计算本周期内发送时点的偏移：
@@ -303,14 +273,6 @@ func (e *Engine) delayOffsetLocked(r config.ParsedRule) time.Duration {
 	return time.Duration(offset) * time.Millisecond
 }
 
-// repeatIntervalLocked 返回连点重复之间的间隔。
-func (e *Engine) repeatIntervalLocked(r config.ParsedRule) time.Duration {
-	if r.RepeatInterval > 0 {
-		return time.Duration(r.RepeatInterval) * time.Millisecond
-	}
-	return time.Duration(r.IntervalMS) * time.Millisecond
-}
-
 func (e *Engine) activateLocked(st *ruleState, now time.Time) {
 	switch st.rule.Kind {
 	case config.ActionOnce:
@@ -326,7 +288,6 @@ func (e *Engine) activateLocked(st *ruleState, now time.Time) {
 	default: // tap / seq：激活即触发一次
 		st.nextFire = now
 		st.fireAt = time.Time{}
-		st.burst = 0
 	}
 }
 
@@ -339,7 +300,6 @@ func (e *Engine) deactivateLocked(st *ruleState) {
 	}
 	st.nextFire = time.Time{}
 	st.fireAt = time.Time{}
-	st.burst = 0
 	st.cursor = 0
 }
 

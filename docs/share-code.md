@@ -2,11 +2,12 @@
 
 > 状态：**v2 定稿**（2026-10-13）。这是「工具」内生成与消费的**唯一交换格式**：作者在工具内导出，玩家从剪贴板粘贴导入。任何一方放宽校验都属于缺陷。
 > 向后兼容：工具仍可解析 **v1** 旧码与旧存档（v1 码重新导出时自动升级为 v2）。
+> 设计取向：**配置门槛优先**。宏本身按轮循环触发，玩家不需要理解「重复次数」「优先级」这类概念——协议刻意不提供它们。
 
 ## 形式
 
 ```
-DLM2:eyJ2IjoyLCJnIjoiZDMiLCJuIjoi5pqX6buRMyDpgJ_liLciLCJhIjoi5p-QQkTkvZzogIUiLCJ0ZyI6IkYxIiwicCI6W3sibiI6IumAn-WItyIsInIiOlt7InRnIjoidCIsImEiOiJ0YXA6MiIsImkiOjMwMCwic3QiOjMsInByIjoxfSx7InRnIjoidCIsImEiOiJob2xkOlJNQiJ9LHsidGciOiJ0IiwiYSI6InRhcDoxIiwiaSI6MTUwLCJzdCI6MiwiZCI6LTQwLCJyZCI6dHJ1ZSwicnAiOjMsInJpIjo2MH1dfV19
+DLM2:eyJ2IjoyLCJnIjoiZDMiLCJuIjoi5pqX6buRMyDpgJ_liLciLCJhIjoi5p-QQkTkvZzogIUiLCJ0ZyI6IkYxIiwicCI6W3sibiI6IumAn-WItyIsInIiOlt7InRnIjoidCIsImEiOiJ0YXA6MiIsImkiOjMwMCwic3QiOjN9LHsidGciOiJ0IiwiYSI6ImhvbGQ6Uk1CIn0seyJ0ZyI6InQiLCJhIjoidGFwOjEiLCJpIjoxNTAsInN0IjoyLCJkIjotNDAsInJkIjp0cnVlfV19XX0
 ```
 
 - `DLM<版本>:` 为前缀（字母大小写不敏感）；v2 工具接受 `DLM1` 与 `DLM2`，前缀声明的版本必须与正文 `v` 一致
@@ -51,9 +52,6 @@ DLM2:eyJ2IjoyLCJnIjoiZDMiLCJuIjoi5pqX6buRMyDpgJ_liLciLCJhIjoi5p-QQkTkvZzogIUiLCJ
 | `st` | 否 | **释放策略**：`1` 按住不放、`2` 连点、`3` 保持Buff；缺省（0）表示未声明，由动作类型推断 |
 | `d` | 否 | **延迟**毫秒：正数延后、负数提前（负值等价于「推迟到周期末尾前 \|d\|」），`0` 关闭；仅连点 |
 | `rd` | 否 | **延迟随机**：勾选后实际延迟取 0～\|d\| 之间的随机值；仅连点，且必须与 `d` 同时出现 |
-| `rp` | 否 | **重复次数**：一次触发内连点 N 次，`2–20`；仅连点 |
-| `ri` | 否 | **重复间隔**毫秒：重复之间的等待，`20–600000`；设置了 `rp` 就必须设置 `ri` |
-| `pr` | 否 | **优先级**：`0–6`，越大越优先；仅 `st=3`（保持Buff）可设置 |
 
 动作：
 
@@ -74,8 +72,7 @@ DLM2:eyJ2IjoyLCJnIjoiZDMiLCJuIjoi5pqX6buRMyDpgJ_liLciLCJhIjoi5p-QQkTkvZzogIUiLCJ
 - **总开关**：`tg` 键（默认 `F1`）是主控。关闭时任何规则都不触发；开启后 `t` 规则持续运行，`h` 规则在按住时触发
 - **前台保护**：仅当目标游戏进程（可在编辑器里按游戏修改，默认见 README）位于前台时发送；目标失去前台、宏关闭、程序退出时，**所有按住（`hold`）中的键立即释放**，避免按键卡死
 - **保持Buff 守卫**：`st=3` 的规则在发送前会查询该技能 Buff 是否仍在生效（由游戏适配层提供屏幕识别；无守卫的游戏恒视为已断），仍在生效则本轮不按键、150ms 后重采样
-- **优先级仲裁**：同方案内，若存在优先级更高（`pr` 更大）且其 Buff **仍在生效**的保持Buff 规则，则当前规则整轮让路——复刻 D3keyHelper 的仲裁，避免多技能互相打断
-- **延迟与重复**：延迟只影响发送时点在周期内的位置，不改变周期长度；重复连点在一次周期内连发 `rp` 次后回到周期节奏
+- **延迟**：只影响发送时点在周期内的位置，不改变周期长度；\|延迟\| ≤ 20ms 视为关闭
 - **同键去重**：同一键同时作为触发与动作会形成自我叠加，工具启动与保存时警告
 - **方案切换**：默认启用第一个方案；其余方案可用托盘菜单或各自的 `hk` 切换键切换。`hk` 全局生效（不要求游戏在前台），按住不放的键在切换前会先释放
 - **多方案同键**：多个方案共用同一 `hk` 时只有最后设置的那个生效，保存与导入时会警告
@@ -83,16 +80,16 @@ DLM2:eyJ2IjoyLCJnIjoiZDMiLCJuIjoi5pqX6buRMyDpgJ_liLciLCJhIjoi5p-QQkTkvZzogIUiLCJ
 ## 示例
 
 ```
-DLM2:eyJ2IjoyLCJnIjoiZDMiLCJuIjoi5pqX6buRMyDpgJ_liLciLCJhIjoi5p-QQkTkvZzogIUiLCJ0ZyI6IkYxIiwicCI6W3sibiI6IumAn-WItyIsInIiOlt7InRnIjoidCIsImEiOiJ0YXA6MiIsImkiOjMwMCwic3QiOjMsInByIjoxfSx7InRnIjoidCIsImEiOiJob2xkOlJNQiJ9LHsidGciOiJ0IiwiYSI6InRhcDoxIiwiaSI6MTUwLCJzdCI6MiwiZCI6LTQwLCJyZCI6dHJ1ZSwicnAiOjMsInJpIjo2MH1dfV19
+DLM2:eyJ2IjoyLCJnIjoiZDMiLCJuIjoi5pqX6buRMyDpgJ_liLciLCJhIjoi5p-QQkTkvZzogIUiLCJ0ZyI6IkYxIiwicCI6W3sibiI6IumAn-WItyIsInIiOlt7InRnIjoidCIsImEiOiJ0YXA6MiIsImkiOjMwMCwic3QiOjN9LHsidGciOiJ0IiwiYSI6ImhvbGQ6Uk1CIn0seyJ0ZyI6InQiLCJhIjoidGFwOjEiLCJpIjoxNTAsInN0IjoyLCJkIjotNDAsInJkIjp0cnVlfV19XX0
 ```
 
 解码后等价于：
 
 ```json
-{"v":2,"g":"d3","n":"暗黑3 速刷","a":"某BD作者","tg":"F1","p":[{"n":"速刷","r":[{"tg":"t","a":"tap:2","i":300,"st":3,"pr":1},{"tg":"t","a":"hold:RMB"},{"tg":"t","a":"tap:1","i":150,"st":2,"d":-40,"rd":true,"rp":3,"ri":60}]}]}
+{"v":2,"g":"d3","n":"暗黑3 速刷","a":"某BD作者","tg":"F1","p":[{"n":"速刷","r":[{"tg":"t","a":"tap:2","i":300,"st":3},{"tg":"t","a":"hold:RMB"},{"tg":"t","a":"tap:1","i":150,"st":2,"d":-40,"rd":true}]}]}
 ```
 
-读法：暗黑3 配置，`F1` 开启后——技能 2 为**保持Buff**（优先级 1，由发光环取色守卫按需补放，每 300ms 采样）；全程按住右键不放（引导类技能）；技能 1 **连点**，间隔 150ms 且**延迟 -40ms（周期末尾前发送）+ 随机化**，每次触发连发 **3 次**、重复间隔 60ms。
+读法：暗黑3 配置，`F1` 开启后——技能 2 为**保持Buff**（由发光环取色守卫按需补放，每 300ms 采样）；全程按住右键不放（引导类技能）；技能 1 **连点**，间隔 150ms 且**延迟 -40ms（周期末尾前发送）+ 随机化**。
 
 ## 校验规则（Fail Fast）
 
@@ -100,19 +97,22 @@ DLM2:eyJ2IjoyLCJnIjoiZDMiLCJuIjoi5pqX6buRMyDpgJ_liLciLCJhIjoi5p-QQkTkvZzogIUiLCJ
 
 1. 前缀必须是 `DLM1` 或 `DLM2`（大小写不敏感），整码 ≤ 4096 字符；前缀声明版本必须与正文 `v` 一致，且 `v ∈ [1, 2]`
 2. 正文必须能按 base64url 解码（容忍 `=` 填充与空白字符），解码后 ≤ 3000 字节且为合法 UTF-8
-3. JSON 必须能解析、无未知字段、无多余尾巴
+3. JSON 必须能解析、**无未知字段**、无多余尾巴
 4. `v` 必须在支持范围内（不匹配直接拒绝并提示升级）；`g` 若出现必须在 `d4` / `d3` / `d2r` 之内
 5. `n` / `a` ≤ 24 字符；方案数 1–4；每方案规则数 1–8
 6. `tg` 只接受 `t` 或 `h:<合法键名>`；`a` 的动作类型与键名必须在白名单内，序列 ≤ 6 键；`hk` 若出现必须是合法键盘键（不支持鼠标键，理由同 `tg`）
 7. `tap` / `seq` 的 `i` 必须在 [20, 600000]；`once` / `hold` 不允许出现 `i`
 8. `d` 在 [-30000, 30000]；`rd` 必须与 `d != 0` 同时出现；`d` / `rd` 仅 `tap` 允许
-9. `rp` 在 [2, 20] 且仅 `tap` 允许；`rp` 与 `ri` 必须成对出现，`ri` 在 [20, 600000]
-10. `pr` 在 [0, 6]，且仅当 `st = 3`（保持Buff）允许出现
-11. `st` 在 [0, 3]；显式声明时必须与动作相容：`1` 要求 `hold:`，`2` 要求 `tap:`，`3` 要求 `tap:` 且不得设置 `rp`
+9. `st` 在 [0, 3]；显式声明时必须与动作相容：`1` 要求 `hold:`，`2` 要求 `tap:`，`3` 要求 `tap:`
+10. `rp` / `ri` / `pr` 是**已回收字段**（见「版本演进」）：出现即按未知字段拒绝
 
 ## 版本演进
 
-- **v1 → v2**（2026-10-13）：规则新增 `st` / `d` / `rd` / `rp` / `ri` / `pr` 六个可选字段（释放策略、延迟、延迟随机、重复次数、重复间隔、优先级）；`v1` 码全部字段语义不变，仍可解析
+- **v1 → v2**（2026-10-13）：规则新增 `st` / `d` / `rd` 三个可选字段（释放策略、延迟、延迟随机）；`v1` 码的字段语义不变，仍可解析
+- v2 定稿过程中曾短暂引入 `rp` / `ri` / `pr`（重复次数、重复间隔、优先级）。这三个概念与「宏按轮循环触发」的模型重复，且 D3keyHelper 也只是把它们藏在配置文件里、界面从不暴露，因此**已回收**：
+  - 界面不再提供对应列
+  - 协议不再接受这三个字段（出现即拒绝）
+  - 旧存档若含它们会被隔离为 `.bad-<时间戳>`，需重新配置
 - 语义或字段再次变化 → 升版本（`DLM3:`）；旧版工具遇到未知版本必须拒绝并提示升级
 - 工具声明支持的版本集合（v2 工具：`{1, 2}`）
 

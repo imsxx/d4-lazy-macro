@@ -208,24 +208,6 @@ func TestBuffCheckerSkipsWhenActive(t *testing.T) {
 	expectEvents(t, sender, "tap:1")
 }
 
-func TestTapRepeatBurst(t *testing.T) {
-	// 连点 3 次、重复间隔 50ms：一个周期内连发 3 次，随后回到周期节奏。
-	e, sender, _, _ := newTestEngine(t, []config.ParsedRule{
-		{Kind: config.ActionTap, Keys: []uint16{0x31}, IntervalMS: 300, Repeat: 3, RepeatInterval: 50},
-	})
-	e.SetEnabled(true)
-	e.Tick(base, true)
-	expectEvents(t, sender, "tap:1")
-	e.Tick(base.Add(50*time.Millisecond), true)
-	expectEvents(t, sender, "tap:1", "tap:1")
-	e.Tick(base.Add(100*time.Millisecond), true)
-	expectEvents(t, sender, "tap:1", "tap:1", "tap:1")
-	// 爆发结束后进入等待：周期终点为 100 + 300 = 400ms
-	e.Tick(base.Add(399*time.Millisecond), true)
-	expectEvents(t, sender, "tap:1", "tap:1", "tap:1")
-	e.Tick(base.Add(400*time.Millisecond), true)
-	expectEvents(t, sender, "tap:1", "tap:1", "tap:1", "tap:1")
-}
 
 func TestTapDelayPostponesWithinCycle(t *testing.T) {
 	// 正延迟：周期起点后等待 100ms 才发送。
@@ -279,24 +261,6 @@ func TestTapRandomDelayUsesInjectedSource(t *testing.T) {
 	expectEvents(t, sender, "tap:1")
 }
 
-func TestBuffPriorityYieldsToActiveHigherBuff(t *testing.T) {
-	// 两条保持Buff 规则：高优先级（技能1）的 Buff 仍在生效时，两条都让路；
-	// 高优先级 Buff 断开后，低优先级（技能2）才能补自己的 Buff。
-	e, sender, _, _ := newTestEngine(t, []config.ParsedRule{
-		{Kind: config.ActionTap, Keys: []uint16{0x31}, IntervalMS: 100, Buff: true, Priority: 5},
-		{Kind: config.ActionTap, Keys: []uint16{0x32}, IntervalMS: 100, Buff: true, Priority: 1},
-	})
-	active := map[uint16]bool{0x31: true, 0x32: false}
-	e.SetBuffChecker(func(vk uint16) bool { return active[vk] })
-	e.SetEnabled(true)
-
-	e.Tick(base, true)
-	expectEvents(t, sender)
-
-	active[0x31] = false
-	e.Tick(base.Add(150*time.Millisecond), true)
-	expectEvents(t, sender, "tap:1", "tap:2")
-}
 
 func TestBuffGuardOnlyAppliesToBuffRules(t *testing.T) {
 	// 普通连点规则（未声明保持Buff）不受 Buff 检测器影响。
