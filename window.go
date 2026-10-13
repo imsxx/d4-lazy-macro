@@ -22,27 +22,25 @@ const (
 	maxProfiles = 4
 	numSlots    = 6
 
-	// 窗口紧凑黄金比例：宽 680，高 510，轻巧干练，切出不挡屏。
-	fixedWinWidth  = 680
-	fixedWinHeight = 510
+	// 对齐 D3keyHelper 经典左右双栏比例：宽 870，高 550
+	fixedWinWidth  = 870
+	fixedWinHeight = 550
 )
 
-// 槽位表列宽：紧凑规整，杜绝拉伸畸变
+// 槽位表紧凑列宽（严格按 D3keyHelper 规格定宽，杜绝暴力拉扯）
 const (
 	colSlotName   = 68
-	colKey        = 62
-	colStrategy   = 96
-	colInterval   = 64
-	colDelay      = 56
-	colRandom     = 60
-	colRowSpacing = 6
-	ctrlHeight    = 25
+	colKey        = 56
+	colStrategy   = 88
+	colInterval   = 62
+	colDelay      = 52
+	colRandom     = 58
+	colRowSpacing = 4
+	ctrlHeight    = 24
 )
 
-// 延迟的界面取值范围
 const maxDelayUI = 30000
 
-// 槽位释放策略
 const (
 	strategyDisabled = config.StrategyDisabled
 	strategyHold     = config.StrategyHold
@@ -91,7 +89,7 @@ func defaultSlots() [numSlots]skillSlotData {
 			Name:       defs[i].Name,
 			DefaultKey: defs[i].DefaultKey,
 			Key:        defs[i].DefaultKey,
-			IntervalMS: 250,
+			IntervalMS: 300,
 		}
 	}
 	return out
@@ -113,21 +111,18 @@ type mainWindow struct {
 	app *app
 	mw  *walk.MainWindow
 
-	// 顶部 Header：横排游戏切换按钮
+	// 顶部 Header 游戏切换按钮
 	d3Btn  *walk.PushButton
 	d4Btn  *walk.PushButton
 	d2rBtn *walk.PushButton
 
-	// 顶部 Header：全局宏启停与运行状态
+	// 右栏全局战斗宏启动快捷键与启动方式
 	statusLabel    *walk.Label
 	toggleKeyBtn   *walk.PushButton
 	startModeCombo *walk.ComboBox
-	autoSaveLbl    *walk.Label
 
-	// 主体 TabWidget：4个方案页 + 暗黑3专属助手页(动态挂载) + 防护与偏好页
-	tabWidget     *walk.TabWidget
-	helperTabPage *walk.TabPage
-	prefTabPage   *walk.TabPage
+	// 左栏原生 TabWidget (4套方案页)
+	tabWidget *walk.TabWidget
 
 	// 4个配置 × 6个技能槽位的控件
 	slotKeyBtns       [maxProfiles][numSlots]*walk.PushButton
@@ -158,27 +153,32 @@ type mainWindow struct {
 
 	hiddenHintShown bool
 
-	// 城镇助手控件 (仅暗黑3专属)
-	helperHotkey  *walk.LineEdit
-	helperSpeed   *walk.ComboBox
-	helperDev     *walk.CheckBox
-	helperChecks  []helperEntry
-	reforgeTarget *walk.ComboBox
+	// 右栏暗黑3专属助手区域容器与控件
+	helperContainer *walk.Composite
+	nonD3HintLabel  *walk.Label
+	helperHotkey    *walk.LineEdit
+	helperSpeed     *walk.ComboBox
+	helperDev       *walk.CheckBox
+	helperChecks    []helperEntry
+	reforgeTarget   *walk.ComboBox
 
-	// 防护与偏好控件 (平铺在独立标签页，彻底干掉二级弹窗)
-	smartPauseCheck    *walk.CheckBox
+	// 快速暂停控件 (放在左栏下方「本配置设置」)
 	quickPauseCheck    *walk.CheckBox
 	quickPauseTrigger  *walk.ComboBox
 	quickPauseMouseKey *walk.ComboBox
 	quickPauseAction   *walk.ComboBox
 	quickPauseDelay    *walk.LineEdit
-	forceStandCheck    *walk.CheckBox
-	forceStandKeyBtn   *walk.PushButton
-	soundCueCheck      *walk.CheckBox
+
+	// 右栏通用偏好设置 (智能暂停、强制站立、提示音)
+	smartPauseCheck  *walk.CheckBox
+	forceStandCheck  *walk.CheckBox
+	forceStandKeyBtn *walk.PushButton
+	soundCueCheck    *walk.CheckBox
 
 	// 底部状态栏
 	activeProfLbl *walk.Label
 	targetProcLbl *walk.Label
+	autoSaveLbl   *walk.Label
 }
 
 func (a *app) createMainWindow() error {
@@ -199,16 +199,7 @@ func (a *app) createMainWindow() error {
 		posY = 50
 	}
 
-	// 预先准备 4 个方案页 + 1 个城镇助手页 + 1 个防护偏好页
-	tabPages := []decl.TabPage{
-		w.createTabPage(0),
-		w.createTabPage(1),
-		w.createTabPage(2),
-		w.createTabPage(3),
-		w.createHelperTabPage(),
-		w.createPreferencesTabPage(),
-	}
-
+	// 左右双栏布局，左边 510px（技能表+方案设置），右边 330px（全局总控+助手+偏好）
 	err := decl.MainWindow{
 		AssignTo: &w.mw,
 		Title:    fmt.Sprintf("%s v%s", appName, version),
@@ -219,131 +210,233 @@ func (a *app) createMainWindow() error {
 		MinSize:  decl.Size{Width: fixedWinWidth, Height: fixedWinHeight},
 		MaxSize:  decl.Size{Width: fixedWinWidth, Height: fixedWinHeight},
 		Visible:  false,
-		Layout:   decl.VBox{Margins: decl.Margins{Left: 8, Top: 8, Right: 8, Bottom: 6}, Spacing: 6},
+		Layout:   decl.VBox{Margins: decl.Margins{Left: 8, Top: 6, Right: 8, Bottom: 6}, Spacing: 5},
 		OnKeyDown: w.handleGlobalKeyDown,
 		Children: []decl.Widget{
-			// ================= 顶部 Header：全局总控区 =================
+			// ================= 顶栏：游戏选择与快捷动作 =================
 			decl.Composite{
-				Layout: decl.VBox{MarginsZero: true, Spacing: 4},
+				Layout: decl.HBox{MarginsZero: true, Spacing: 6},
 				Children: []decl.Widget{
-					// 第一行：横排游戏切换按钮组 + 右侧快捷工具
+					decl.Label{Text: "目标游戏：", Font: decl.Font{Bold: true}},
+					decl.PushButton{
+						AssignTo:  &w.d3Btn,
+						Text:      "暗黑破坏神3",
+						MinSize:   decl.Size{Width: 95, Height: ctrlHeight},
+						MaxSize:   decl.Size{Width: 95, Height: ctrlHeight},
+						OnClicked: func() { w.switchGameDirect("d3") },
+					},
+					decl.PushButton{
+						AssignTo:  &w.d4Btn,
+						Text:      "暗黑破坏神4",
+						MinSize:   decl.Size{Width: 95, Height: ctrlHeight},
+						MaxSize:   decl.Size{Width: 95, Height: ctrlHeight},
+						OnClicked: func() { w.switchGameDirect("d4") },
+					},
+					decl.PushButton{
+						AssignTo:  &w.d2rBtn,
+						Text:      "暗黑破坏神2：重制版",
+						MinSize:   decl.Size{Width: 130, Height: ctrlHeight},
+						MaxSize:   decl.Size{Width: 130, Height: ctrlHeight},
+						OnClicked: func() { w.switchGameDirect("d2r") },
+					},
+					decl.HSpacer{},
+					decl.PushButton{
+						Text:      "导入分享码",
+						MinSize:   decl.Size{Width: 76, Height: ctrlHeight},
+						MaxSize:   decl.Size{Width: 76, Height: ctrlHeight},
+						OnClicked: func() { a.importFromClipboard() },
+					},
+					decl.PushButton{
+						Text:      "复制分享码",
+						MinSize:   decl.Size{Width: 76, Height: ctrlHeight},
+						MaxSize:   decl.Size{Width: 76, Height: ctrlHeight},
+						OnClicked: w.exportCode,
+					},
+					decl.PushButton{
+						Text:      "运行日志",
+						MinSize:   decl.Size{Width: 64, Height: ctrlHeight},
+						MaxSize:   decl.Size{Width: 64, Height: ctrlHeight},
+						OnClicked: a.showLogWindow,
+					},
+				},
+			},
+
+			// ================= 主体：左右双栏仪表盘 =================
+			decl.Composite{
+				Layout: decl.HBox{MarginsZero: true, Spacing: 8},
+				Children: []decl.Widget{
+					// ---------- 左栏：方案技能表 + 方案设置 (515px) ----------
 					decl.Composite{
-						Layout: decl.HBox{MarginsZero: true, Spacing: 6},
+						MinSize: decl.Size{Width: 515},
+						MaxSize: decl.Size{Width: 515},
+						Layout:  decl.VBox{MarginsZero: true, Spacing: 4},
 						Children: []decl.Widget{
-							decl.Label{Text: "目标游戏：", Font: decl.Font{Bold: true}},
-							decl.PushButton{
-								AssignTo:  &w.d3Btn,
-								Text:      "暗黑破坏神3",
-								MinSize:   decl.Size{Width: 95, Height: ctrlHeight},
-								MaxSize:   decl.Size{Width: 95, Height: ctrlHeight},
-								OnClicked: func() { w.switchGameDirect("d3") },
-							},
-							decl.PushButton{
-								AssignTo:  &w.d4Btn,
-								Text:      "暗黑破坏神4",
-								MinSize:   decl.Size{Width: 95, Height: ctrlHeight},
-								MaxSize:   decl.Size{Width: 95, Height: ctrlHeight},
-								OnClicked: func() { w.switchGameDirect("d4") },
-							},
-							decl.PushButton{
-								AssignTo:  &w.d2rBtn,
-								Text:      "暗黑破坏神2：重制版",
-								MinSize:   decl.Size{Width: 130, Height: ctrlHeight},
-								MaxSize:   decl.Size{Width: 130, Height: ctrlHeight},
-								OnClicked: func() { w.switchGameDirect("d2r") },
-							},
-							decl.HSpacer{},
-							decl.PushButton{
-								Text:        "导入分享码",
-								MinSize:     decl.Size{Width: 76, Height: ctrlHeight},
-								MaxSize:     decl.Size{Width: 76, Height: ctrlHeight},
-								OnClicked:   func() { a.importFromClipboard() },
-								ToolTipText: "从剪贴板解析并导入分享码（实时生效）",
-							},
-							decl.PushButton{
-								Text:        "复制分享码",
-								MinSize:     decl.Size{Width: 76, Height: ctrlHeight},
-								MaxSize:     decl.Size{Width: 76, Height: ctrlHeight},
-								OnClicked:   w.exportCode,
-								ToolTipText: "将当前游戏的全部配置生成分享码并写入剪贴板",
-							},
-							decl.PushButton{
-								Text:      "运行日志",
-								MinSize:   decl.Size{Width: 64, Height: ctrlHeight},
-								MaxSize:   decl.Size{Width: 64, Height: ctrlHeight},
-								OnClicked: a.showLogWindow,
+							decl.TabWidget{
+								AssignTo:              &w.tabWidget,
+								OnCurrentIndexChanged: w.onTabChanged,
+								Pages: []decl.TabPage{
+									w.createTabPage(0),
+									w.createTabPage(1),
+									w.createTabPage(2),
+									w.createTabPage(3),
+								},
 							},
 						},
 					},
-					// 第二行：全局宏运行状态 + 启动热键 + 启动方式 + 自动保存标识
+
+					// ---------- 右栏：全局战斗宏总控 + 辅助功能 + 偏好 (335px) ----------
 					decl.Composite{
-						Layout: decl.HBox{MarginsZero: true, Spacing: 8},
+						MinSize: decl.Size{Width: 335},
+						MaxSize: decl.Size{Width: 335},
+						Layout:  decl.VBox{MarginsZero: true, Spacing: 6},
 						Children: []decl.Widget{
-							decl.Label{
-								AssignTo: &w.statusLabel,
-								Text:     "● 宏已就绪 (前台生效)",
-								Font:     decl.Font{Bold: true},
-								MinSize:  decl.Size{Width: 175},
-							},
-							decl.Label{Text: "启动热键：", Font: decl.Font{Bold: true}},
-							decl.PushButton{
-								AssignTo:    &w.toggleKeyBtn,
-								Text:        "X1",
-								Font:        decl.Font{Bold: true},
-								MinSize:     decl.Size{Width: 66, Height: ctrlHeight},
-								MaxSize:     decl.Size{Width: 66, Height: ctrlHeight},
-								OnClicked:   func() { w.startCapture(-1, 100) },
-								OnKeyDown:   w.handleGlobalKeyDown,
-								ToolTipText: "左键点击录入；右键快捷选鼠标侧键(X1/X2)/中键/F2/`",
-								ContextMenuItems: []decl.MenuItem{
-									decl.Action{Text: "设为 鼠标侧键1 (X1)", OnTriggered: func() { w.setToggleKey("X1") }},
-									decl.Action{Text: "设为 鼠标侧键2 (X2)", OnTriggered: func() { w.setToggleKey("X2") }},
-									decl.Action{Text: "设为 鼠标中键 (MMB)", OnTriggered: func() { w.setToggleKey("MMB") }},
-									decl.Separator{},
-									decl.Action{Text: "设为 F2", OnTriggered: func() { w.setToggleKey("F2") }},
-									decl.Action{Text: "设为 ` (波浪号)", OnTriggered: func() { w.setToggleKey("`") }},
+							// 1. 战斗宏启动快捷键 (醒目红字对齐 D3keyHelper)
+							decl.Composite{
+								Layout: decl.HBox{MarginsZero: true, Spacing: 6},
+								Children: []decl.Widget{
+									decl.Label{
+										Text:      "战斗宏启动快捷键：",
+										TextColor: walk.RGB(200, 20, 20),
+										Font:      decl.Font{Bold: true, PointSize: 9},
+									},
+									decl.PushButton{
+										AssignTo:    &w.toggleKeyBtn,
+										Text:        "X1",
+										Font:        decl.Font{Bold: true},
+										MinSize:     decl.Size{Width: 68, Height: ctrlHeight},
+										MaxSize:     decl.Size{Width: 68, Height: ctrlHeight},
+										OnClicked:   func() { w.startCapture(-1, 100) },
+										OnKeyDown:   w.handleGlobalKeyDown,
+										ToolTipText: "左键点击录入；右键快捷选鼠标侧键/中键/F2",
+										ContextMenuItems: []decl.MenuItem{
+											decl.Action{Text: "设为 鼠标侧键1 (X1)", OnTriggered: func() { w.setToggleKey("X1") }},
+											decl.Action{Text: "设为 鼠标侧键2 (X2)", OnTriggered: func() { w.setToggleKey("X2") }},
+											decl.Action{Text: "设为 鼠标中键 (MMB)", OnTriggered: func() { w.setToggleKey("MMB") }},
+											decl.Separator{},
+											decl.Action{Text: "设为 F2", OnTriggered: func() { w.setToggleKey("F2") }},
+											decl.Action{Text: "设为 ` (波浪号)", OnTriggered: func() { w.setToggleKey("`") }},
+										},
+									},
+									decl.HSpacer{},
 								},
 							},
-							decl.Label{Text: "启动方式："},
-							decl.ComboBox{
-								AssignTo:              &w.startModeCombo,
-								Model:                 startModeNames,
-								MinSize:               decl.Size{Width: 135, Height: ctrlHeight},
-								MaxSize:               decl.Size{Width: 135, Height: ctrlHeight},
-								OnCurrentIndexChanged: w.onStartModeChanged,
-								ToolTipText:           "懒人模式：按一下开，再按一下关\n仅按下时：按住热键生效，松开立即停止",
+
+							// 2. 宏状态指示行
+							decl.Composite{
+								Layout: decl.HBox{MarginsZero: true, Spacing: 6},
+								Children: []decl.Widget{
+									decl.Label{
+										AssignTo: &w.statusLabel,
+										Text:     "● 宏已就绪 (前台生效)",
+										Font:     decl.Font{Bold: true},
+									},
+									decl.HSpacer{},
+									decl.Label{Text: "启动方式："},
+									decl.ComboBox{
+										AssignTo:              &w.startModeCombo,
+										Model:                 startModeNames,
+										MinSize:               decl.Size{Width: 120, Height: ctrlHeight},
+										MaxSize:               decl.Size{Width: 120, Height: ctrlHeight},
+										OnCurrentIndexChanged: w.onStartModeChanged,
+									},
+								},
 							},
-							decl.HSpacer{},
-							decl.Label{
-								AssignTo:  &w.autoSaveLbl,
-								Text:      "✓ 实时生效",
-								TextColor: walk.RGB(110, 110, 110),
+
+							// 3. 辅助功能卡片 (仅在暗黑3下显示助手，非暗黑3下显示对应提示)
+							decl.GroupBox{
+								Title:  "辅助功能",
+								Layout: decl.VBox{Margins: decl.Margins{Left: 8, Top: 6, Right: 8, Bottom: 6}, Spacing: 5},
+								Children: []decl.Widget{
+									// 暗黑3专属面板
+									w.createHelperContent(),
+
+									// 非暗黑3下的清爽提示
+									decl.Label{
+										AssignTo:  &w.nonD3HintLabel,
+										Visible:   false,
+										Text:      "当前游戏无需城镇辅助。\n宏只发送技能按键与连点，纯后台静默运行。",
+										TextColor: walk.RGB(120, 120, 120),
+									},
+								},
+							},
+
+							// 4. 全局偏好与防护 (平铺无弹窗)
+							decl.GroupBox{
+								Title:  "操作偏好与防护",
+								Layout: decl.VBox{Margins: decl.Margins{Left: 8, Top: 6, Right: 8, Bottom: 6}, Spacing: 5},
+								Children: []decl.Widget{
+									decl.Composite{
+										Layout: decl.HBox{MarginsZero: true, Spacing: 8},
+										Children: []decl.Widget{
+											decl.CheckBox{
+												AssignTo:         &w.smartPauseCheck,
+												Text:             "智能暂停 (Tab/回车/T/M)",
+												Checked:          w.app.settings.SmartPause,
+												OnCheckedChanged: w.savePreferences,
+												ToolTipText:      "Tab 暂停/恢复；回车(打字)、T(回城)、M(地图) 自动停止宏",
+											},
+											decl.CheckBox{
+												AssignTo:         &w.soundCueCheck,
+												Text:             "切换提示音",
+												Checked:          w.app.settings.SoundCue,
+												OnCheckedChanged: w.savePreferences,
+												ToolTipText:      "按热键切换配置成功时播放提示音",
+											},
+										},
+									},
+									decl.Composite{
+										Layout: decl.HBox{MarginsZero: true, Spacing: 6},
+										Children: []decl.Widget{
+											decl.CheckBox{
+												AssignTo:         &w.forceStandCheck,
+												Text:             "连点左键自动按住站立键：",
+												OnCheckedChanged: w.onForceStandToggled,
+											},
+											decl.PushButton{
+												AssignTo:    &w.forceStandKeyBtn,
+												Text:        "Shift",
+												Font:        decl.Font{Bold: true},
+												MinSize:     decl.Size{Width: 54, Height: ctrlHeight},
+												MaxSize:     decl.Size{Width: 54, Height: ctrlHeight},
+												OnClicked:   func() { w.startCapture(-1, 102) },
+												OnKeyDown:   w.handleGlobalKeyDown,
+												ToolTipText: "强制站立键：默认 LShift",
+												ContextMenuItems: []decl.MenuItem{
+													decl.Action{Text: "恢复默认 (Shift)", OnTriggered: func() { w.setForceStandKey("") }},
+													decl.Action{Text: "设为 LShift", OnTriggered: func() { w.setForceStandKey("LSHIFT") }},
+													decl.Action{Text: "设为 LCtrl", OnTriggered: func() { w.setForceStandKey("LCTRL") }},
+													decl.Action{Text: "设为 LAlt", OnTriggered: func() { w.setForceStandKey("LALT") }},
+												},
+											},
+											decl.HSpacer{},
+										},
+									},
+								},
 							},
 						},
 					},
 				},
 			},
 
-			// ================= 主体 TabWidget =================
-			decl.TabWidget{
-				AssignTo:              &w.tabWidget,
-				OnCurrentIndexChanged: w.onTabChanged,
-				Pages:                 tabPages,
-			},
-
-			// ================= 底部状态栏 Footer =================
+			// ================= 底部状态栏 =================
 			decl.Composite{
-				Layout: decl.HBox{Margins: decl.Margins{Left: 4, Top: 2, Right: 4, Bottom: 2}, Spacing: 12},
+				Layout: decl.HBox{Margins: decl.Margins{Left: 4, Top: 1, Right: 4, Bottom: 1}, Spacing: 12},
 				Children: []decl.Widget{
 					decl.Label{
-						AssignTo: &w.activeProfLbl,
-						Text:     "当前激活：配置 1",
-						Font:     decl.Font{Bold: true},
+						AssignTo:  &w.activeProfLbl,
+						Text:      "当前激活配置：配置 1",
+						TextColor: walk.RGB(200, 20, 20),
+						Font:      decl.Font{Bold: true},
 					},
 					decl.Label{
 						AssignTo:  &w.targetProcLbl,
 						Text:      "目标进程：Diablo III64.exe",
-						TextColor: walk.RGB(90, 90, 90),
+						TextColor: walk.RGB(100, 100, 100),
+					},
+					decl.Label{
+						AssignTo:  &w.autoSaveLbl,
+						Text:      "✓ 实时生效",
+						TextColor: walk.RGB(40, 140, 40),
 					},
 					decl.HSpacer{},
 					decl.Label{
@@ -358,13 +451,6 @@ func (a *app) createMainWindow() error {
 		return err
 	}
 
-	// 缓存城镇助手与偏好页面的 TabPage 指针，便于动态挂载/卸载
-	if w.tabWidget != nil && w.tabWidget.Pages().Len() >= 6 {
-		w.helperTabPage = w.tabWidget.Pages().At(4)
-		w.prefTabPage = w.tabWidget.Pages().At(5)
-	}
-
-	// 锁定窗口样式：移除最大化和拖拽边框
 	hwnd := w.mw.Handle()
 	style := win.GetWindowLong(hwnd, win.GWL_STYLE)
 	style &^= (win.WS_MAXIMIZEBOX | win.WS_THICKFRAME)
@@ -388,75 +474,135 @@ func (a *app) createMainWindow() error {
 	a.win = w
 	w.loadFromState()
 	w.mw.Show()
-	a.log.Printf("[窗口] 主窗口已打开（紧凑布局 %dx%d）", fixedWinWidth, fixedWinHeight)
+	a.log.Printf("[窗口] 主窗口已打开（对齐 D3keyHelper 左右双栏 %dx%d）", fixedWinWidth, fixedWinHeight)
 	return nil
 }
 
-// createTabPage 构建单套技能方案页
+// createTabPage 构建单套技能配置页 (完全对齐 D3keyHelper 布局)
 func (w *mainWindow) createTabPage(tabIdx int) decl.TabPage {
 	t := tabIdx
+	qp := w.app.settings.QuickPause
 	return decl.TabPage{
-		Title:           fmt.Sprintf("配置 %d", t+1),
+		Title:           fmt.Sprintf("配置%d", t+1),
 		DoubleBuffering: true,
-		Layout:          decl.VBox{Margins: decl.Margins{Left: 8, Top: 8, Right: 8, Bottom: 6}, Spacing: 5},
+		Layout:          decl.VBox{Margins: decl.Margins{Left: 6, Top: 6, Right: 6, Bottom: 6}, Spacing: 4},
 		Children: []decl.Widget{
-			// 表头：小字提示，工整对齐
-			decl.Composite{
-				Layout: decl.HBox{Spacing: colRowSpacing},
+			// 1. 按键宏设置 GroupBox
+			decl.GroupBox{
+				Title:  "按键宏设置",
+				Layout: decl.VBox{Margins: decl.Margins{Left: 6, Top: 6, Right: 6, Bottom: 6}, Spacing: 3},
 				Children: []decl.Widget{
-					decl.Label{Text: "技能槽位", MinSize: decl.Size{Width: colSlotName}, MaxSize: decl.Size{Width: colSlotName}, Font: decl.Font{Bold: true}},
-					decl.Label{Text: "快捷键", MinSize: decl.Size{Width: colKey}, MaxSize: decl.Size{Width: colKey}, Font: decl.Font{Bold: true}},
-					decl.Label{Text: "释放策略", MinSize: decl.Size{Width: colStrategy}, MaxSize: decl.Size{Width: colStrategy}, Font: decl.Font{Bold: true}},
-					decl.Label{Text: "间隔(ms)", MinSize: decl.Size{Width: colInterval}, MaxSize: decl.Size{Width: colInterval}, Font: decl.Font{Bold: true}, ToolTipText: "执行间隔毫秒"},
-					decl.Label{Text: "延迟", MinSize: decl.Size{Width: colDelay}, MaxSize: decl.Size{Width: colDelay}, Font: decl.Font{Bold: true}, ToolTipText: "延迟毫秒：仅连点有效"},
-					decl.Label{Text: "±随机", MinSize: decl.Size{Width: colRandom}, MaxSize: decl.Size{Width: colRandom}, Font: decl.Font{Bold: true}, ToolTipText: "每次取 0～|延迟| 随机数"},
-					decl.HSpacer{},
-				},
-			},
-			// 6 行核心技能槽位
-			w.createSlotRow(t, 0, "技能一"),
-			w.createSlotRow(t, 1, "技能二"),
-			w.createSlotRow(t, 2, "技能三"),
-			w.createSlotRow(t, 3, "技能四"),
-			w.createSlotRow(t, 4, "左键技能"),
-			w.createSlotRow(t, 5, "右键技能"),
-
-			decl.VSpacer{Size: 4},
-
-			// 方案级参数：方案名、一键切换热键、按键模式
-			decl.Composite{
-				Layout: decl.HBox{MarginsZero: true, Spacing: 6},
-				Children: []decl.Widget{
-					decl.Label{Text: "方案名："},
-					decl.LineEdit{
-						AssignTo:          &w.profileNameEdits[t],
-						MinSize:           decl.Size{Width: 90, Height: ctrlHeight},
-						MaxSize:           decl.Size{Width: 90, Height: ctrlHeight},
-						OnEditingFinished: func() { w.onProfileNameEdited(t) },
-					},
-					decl.Label{Text: "切换热键："},
-					decl.PushButton{
-						AssignTo:    &w.switchKeyBtns[t],
-						Text:        "无",
-						MinSize:     decl.Size{Width: 56, Height: ctrlHeight},
-						MaxSize:     decl.Size{Width: 56, Height: ctrlHeight},
-						OnClicked:   func() { w.startCapture(t, 101) },
-						OnKeyDown:   w.handleGlobalKeyDown,
-						ToolTipText: "游戏中按此键秒切本方案；右键清除",
-						ContextMenuItems: []decl.MenuItem{
-							decl.Action{Text: "清除切换键 (设为无)", OnTriggered: func() { w.clearSwitchKey(t) }},
+					// 表头行
+					decl.Composite{
+						Layout: decl.HBox{Spacing: colRowSpacing},
+						Children: []decl.Widget{
+							decl.HSpacer{Size: colSlotName},
+							decl.Label{Text: "快捷键", MinSize: decl.Size{Width: colKey}, MaxSize: decl.Size{Width: colKey}, Alignment: decl.AlignHCenterVCenter},
+							decl.Label{Text: "策略", MinSize: decl.Size{Width: colStrategy}, MaxSize: decl.Size{Width: colStrategy}, Alignment: decl.AlignHCenterVCenter},
+							decl.Label{Text: "执行间隔 (毫秒)", MinSize: decl.Size{Width: colInterval}, MaxSize: decl.Size{Width: colInterval}, Alignment: decl.AlignHCenterVCenter},
+							decl.Label{Text: "延迟 (毫秒)", MinSize: decl.Size{Width: colDelay}, MaxSize: decl.Size{Width: colDelay}, Alignment: decl.AlignHCenterVCenter},
+							decl.Label{Text: "延迟随机", MinSize: decl.Size{Width: colRandom}, MaxSize: decl.Size{Width: colRandom}, Alignment: decl.AlignHCenterVCenter},
+							decl.HSpacer{},
 						},
 					},
-					decl.Label{Text: "按键模式："},
-					decl.ComboBox{
-						AssignTo:              &w.modeComs[t],
-						Model:                 modeNames,
-						MinSize:               decl.Size{Width: 96, Height: ctrlHeight},
-						MaxSize:               decl.Size{Width: 96, Height: ctrlHeight},
-						OnCurrentIndexChanged: func() { w.onProfileModeChanged(t) },
-						ToolTipText:           "并发按键：各自独立计时到点就按\n循环按键：按槽位顺序轮流按",
+					w.createSlotRow(t, 0, "技能一:"),
+					w.createSlotRow(t, 1, "技能二:"),
+					w.createSlotRow(t, 2, "技能三:"),
+					w.createSlotRow(t, 3, "技能四:"),
+					w.createSlotRow(t, 4, "左键技能:"),
+					w.createSlotRow(t, 5, "右键技能:"),
+				},
+			},
+
+			// 2. 额外设置 GroupBox (方案级设置 + 快速暂停)
+			decl.GroupBox{
+				Title:  "额外设置",
+				Layout: decl.VBox{Margins: decl.Margins{Left: 6, Top: 5, Right: 6, Bottom: 5}, Spacing: 4},
+				Children: []decl.Widget{
+					// 行 1: 方案名与一键秒切热键、按键模式
+					decl.Composite{
+						Layout: decl.HBox{MarginsZero: true, Spacing: 4},
+						Children: []decl.Widget{
+							decl.Label{Text: "快速切换至本配置："},
+							decl.PushButton{
+								AssignTo:    &w.switchKeyBtns[t],
+								Text:        "无",
+								Font:        decl.Font{Bold: true},
+								MinSize:     decl.Size{Width: 50, Height: ctrlHeight},
+								MaxSize:     decl.Size{Width: 50, Height: ctrlHeight},
+								OnClicked:   func() { w.startCapture(t, 101) },
+								OnKeyDown:   w.handleGlobalKeyDown,
+								ToolTipText: "游戏中按此键秒切本套配置；右键清除",
+								ContextMenuItems: []decl.MenuItem{
+									decl.Action{Text: "清除切换键 (设为无)", OnTriggered: func() { w.clearSwitchKey(t) }},
+								},
+							},
+							decl.Label{Text: "配置名："},
+							decl.LineEdit{
+								AssignTo:          &w.profileNameEdits[t],
+								MinSize:           decl.Size{Width: 80, Height: ctrlHeight},
+								MaxSize:           decl.Size{Width: 80, Height: ctrlHeight},
+								OnEditingFinished: func() { w.onProfileNameEdited(t) },
+							},
+							decl.Label{Text: "按键模式："},
+							decl.ComboBox{
+								AssignTo:              &w.modeComs[t],
+								Model:                 modeNames,
+								MinSize:               decl.Size{Width: 88, Height: ctrlHeight},
+								MaxSize:               decl.Size{Width: 88, Height: ctrlHeight},
+								OnCurrentIndexChanged: func() { w.onProfileModeChanged(t) },
+								ToolTipText:           "并发按键：各自独立计时到点就按\n循环按键：按槽位顺序轮流按",
+							},
+							decl.HSpacer{},
+						},
 					},
-					decl.HSpacer{},
+
+					// 行 2: 快速暂停设置
+					decl.Composite{
+						Layout: decl.HBox{MarginsZero: true, Spacing: 4},
+						Children: []decl.Widget{
+							decl.CheckBox{
+								AssignTo:         &w.quickPauseCheck,
+								Text:             "快速暂停：",
+								Checked:          qp.Enabled,
+								OnCheckedChanged: w.savePreferences,
+							},
+							decl.ComboBox{
+								AssignTo:              &w.quickPauseTrigger,
+								Model:                 quickPauseTriggerNames,
+								CurrentIndex:          qp.Trigger - 1,
+								MinSize:               decl.Size{Width: 54, Height: ctrlHeight},
+								MaxSize:               decl.Size{Width: 54, Height: ctrlHeight},
+								OnCurrentIndexChanged: w.savePreferences,
+							},
+							decl.ComboBox{
+								AssignTo:              &w.quickPauseMouseKey,
+								Model:                 quickPauseMouseNames,
+								CurrentIndex:          qp.MouseKey - 1,
+								MinSize:               decl.Size{Width: 62, Height: ctrlHeight},
+								MaxSize:               decl.Size{Width: 62, Height: ctrlHeight},
+								OnCurrentIndexChanged: w.savePreferences,
+							},
+							decl.Label{Text: "则"},
+							decl.ComboBox{
+								AssignTo:              &w.quickPauseAction,
+								Model:                 quickPauseActionNames,
+								CurrentIndex:          qp.Action - 1,
+								MinSize:               decl.Size{Width: 105, Height: ctrlHeight},
+								MaxSize:               decl.Size{Width: 105, Height: ctrlHeight},
+								OnCurrentIndexChanged: w.savePreferences,
+							},
+							decl.LineEdit{
+								AssignTo:          &w.quickPauseDelay,
+								Text:              strconv.Itoa(qp.DelayMS),
+								MinSize:           decl.Size{Width: 46, Height: ctrlHeight},
+								MaxSize:           decl.Size{Width: 46, Height: ctrlHeight},
+								OnEditingFinished: w.savePreferences,
+							},
+							decl.Label{Text: "毫秒"},
+							decl.HSpacer{},
+						},
+					},
 				},
 			},
 		},
@@ -467,7 +613,7 @@ func (w *mainWindow) createSlotRow(t, s int, labelText string) decl.Widget {
 	return decl.Composite{
 		Layout: decl.HBox{Spacing: colRowSpacing},
 		Children: []decl.Widget{
-			decl.Label{Text: labelText, MinSize: decl.Size{Width: colSlotName}, MaxSize: decl.Size{Width: colSlotName}},
+			decl.Label{Text: labelText, MinSize: decl.Size{Width: colSlotName}, MaxSize: decl.Size{Width: colSlotName}, Alignment: decl.AlignHFarVCenter},
 			decl.PushButton{
 				AssignTo:    &w.slotKeyBtns[t][s],
 				Text:        "1",
@@ -499,14 +645,14 @@ func (w *mainWindow) createSlotRow(t, s int, labelText string) decl.Widget {
 				MinSize:           decl.Size{Width: colInterval, Height: ctrlHeight},
 				MaxSize:           decl.Size{Width: colInterval, Height: ctrlHeight},
 				OnEditingFinished: func() { w.onSlotIntervalChanged(t, s) },
-				ToolTipText:       "执行间隔(毫秒)",
+				ToolTipText:       "执行间隔 (毫秒)",
 			},
 			decl.LineEdit{
 				AssignTo:          &w.slotDelayEdits[t][s],
 				MinSize:           decl.Size{Width: colDelay, Height: ctrlHeight},
 				MaxSize:           decl.Size{Width: colDelay, Height: ctrlHeight},
 				OnEditingFinished: func() { w.onSlotTuningChanged(t, s) },
-				ToolTipText:       "延迟毫秒：正数延后，负数提前",
+				ToolTipText:       "延迟 (毫秒)：正数延后，负数提前",
 			},
 			decl.CheckBox{
 				AssignTo:         &w.slotRandomChecks[t][s],
@@ -520,8 +666,8 @@ func (w *mainWindow) createSlotRow(t, s int, labelText string) decl.Widget {
 	}
 }
 
-// createHelperTabPage 构建暗黑3专属「城镇助手」标签页（逻辑隔离，仅暗黑3展示）
-func (w *mainWindow) createHelperTabPage() decl.TabPage {
+// createHelperContent 构建右栏暗黑3专属「辅助功能」内容
+func (w *mainWindow) createHelperContent() decl.Widget {
 	hs := w.app.settings.Helpers
 	allHelpers := helper.All()
 	w.helperChecks = make([]helperEntry, len(allHelpers))
@@ -546,41 +692,32 @@ func (w *mainWindow) createHelperTabPage() decl.TabPage {
 	}
 	speedIdx := helperSpeedIndex(hs.DelayMS)
 
-	return decl.TabPage{
-		Title:           "城镇助手",
-		DoubleBuffering: true,
-		Layout:          decl.VBox{Margins: decl.Margins{Left: 12, Top: 10, Right: 12, Bottom: 10}, Spacing: 8},
+	return decl.Composite{
+		AssignTo: &w.helperContainer,
+		Layout:   decl.VBox{MarginsZero: true, Spacing: 4},
 		Children: []decl.Widget{
-			decl.Label{
-				Text: "暗黑3 专属城镇便利助手（魔盒、分解、赌博等）",
-				Font: decl.Font{Bold: true},
-			},
+			// 助手宏启动快捷键 (对齐 D3keyHelper 红字)
 			decl.Composite{
-				Layout: decl.HBox{MarginsZero: true, Spacing: 8},
+				Layout: decl.HBox{MarginsZero: true, Spacing: 4},
 				Children: []decl.Widget{
-					decl.Label{Text: "触发热键："},
+					decl.Label{
+						Text:      "助手宏启动快捷键：",
+						TextColor: walk.RGB(200, 20, 20),
+						Font:      decl.Font{Bold: true},
+					},
 					decl.LineEdit{
 						AssignTo:          &w.helperHotkey,
 						Text:              hs.Hotkey,
-						MinSize:           decl.Size{Width: 50, Height: ctrlHeight},
-						MaxSize:           decl.Size{Width: 50, Height: ctrlHeight},
+						MinSize:           decl.Size{Width: 42, Height: ctrlHeight},
+						MaxSize:           decl.Size{Width: 42, Height: ctrlHeight},
 						OnEditingFinished: w.onHelperChanged,
 						ToolTipText:       "游戏内按此键触发助手，运行中再按可打断",
 					},
-					decl.Label{Text: "动画速度："},
+					decl.Label{Text: "速度："},
 					decl.ComboBox{
 						AssignTo:              &w.helperSpeed,
 						Model:                 helperSpeedNames,
 						CurrentIndex:          speedIdx,
-						MinSize:               decl.Size{Width: 120, Height: ctrlHeight},
-						MaxSize:               decl.Size{Width: 120, Height: ctrlHeight},
-						OnCurrentIndexChanged: w.onHelperChanged,
-					},
-					decl.Label{Text: "重铸目标："},
-					decl.ComboBox{
-						AssignTo:              &w.reforgeTarget,
-						Model:                 reforgeTargetNames,
-						CurrentIndex:          targetIdx,
 						MinSize:               decl.Size{Width: 100, Height: ctrlHeight},
 						MaxSize:               decl.Size{Width: 100, Height: ctrlHeight},
 						OnCurrentIndexChanged: w.onHelperChanged,
@@ -589,148 +726,39 @@ func (w *mainWindow) createHelperTabPage() decl.TabPage {
 				},
 			},
 			decl.Composite{
-				Layout: decl.VBox{MarginsZero: true, Spacing: 4},
-				Children: append([]decl.Widget{
-					decl.Label{Text: "功能启用清单：", Font: decl.Font{Bold: true}},
-				}, checks...),
-			},
-			decl.CheckBox{
-				AssignTo:         &w.helperDev,
-				Text:             "开发者模式（记录取色与几何日志）",
-				Checked:          hs.DevMode,
-				OnCheckedChanged: w.onHelperChanged,
-			},
-			decl.Label{
-				Text:      "* 城镇助手要求游戏窗口化或无边框窗口化运行，宏停止状态下按快捷键触发",
-				TextColor: walk.RGB(160, 100, 30),
-			},
-			decl.VSpacer{},
-		},
-	}
-}
-
-// createPreferencesTabPage 构建全局「防护与偏好」标签页（彻底告别二级弹窗）
-func (w *mainWindow) createPreferencesTabPage() decl.TabPage {
-	qp := w.app.settings.QuickPause
-	return decl.TabPage{
-		Title:           "防护与偏好",
-		DoubleBuffering: true,
-		Layout:          decl.VBox{Margins: decl.Margins{Left: 12, Top: 10, Right: 12, Bottom: 10}, Spacing: 8},
-		Children: []decl.Widget{
-			// 1. 智能暂停
-			decl.Label{Text: "智能防打扰 (智能暂停)", Font: decl.Font{Bold: true}},
-			decl.CheckBox{
-				AssignTo:         &w.smartPauseCheck,
-				Text:             "启用智能暂停（推荐）",
-				Checked:          w.app.settings.SmartPause,
-				OnCheckedChanged: w.savePreferences,
-			},
-			decl.Label{
-				Text:      "　Tab：暂停 / 恢复宏　　回车 (打字) · T (回城) · M (大地图)：立即停止宏",
-				TextColor: walk.RGB(100, 100, 100),
-			},
-
-			decl.VSpacer{Size: 4},
-
-			// 2. 鼠标快速暂停
-			decl.Label{Text: "鼠标手势快速暂停", Font: decl.Font{Bold: true}},
-			decl.CheckBox{
-				AssignTo:         &w.quickPauseCheck,
-				Text:             "启用鼠标快速暂停（临时打断宏输出）",
-				Checked:          qp.Enabled,
-				OnCheckedChanged: w.savePreferences,
-			},
-			decl.Composite{
-				Layout: decl.HBox{MarginsZero: true, Spacing: 6},
+				Layout: decl.HBox{MarginsZero: true, Spacing: 4},
 				Children: []decl.Widget{
-					decl.Label{Text: "鼠标"},
+					decl.Label{Text: "魔盒重铸目标："},
 					decl.ComboBox{
-						AssignTo:              &w.quickPauseTrigger,
-						Model:                 quickPauseTriggerNames,
-						CurrentIndex:          qp.Trigger - 1,
-						MinSize:               decl.Size{Width: 62, Height: ctrlHeight},
-						MaxSize:               decl.Size{Width: 62, Height: ctrlHeight},
-						OnCurrentIndexChanged: w.savePreferences,
+						AssignTo:              &w.reforgeTarget,
+						Model:                 reforgeTargetNames,
+						CurrentIndex:          targetIdx,
+						MinSize:               decl.Size{Width: 95, Height: ctrlHeight},
+						MaxSize:               decl.Size{Width: 95, Height: ctrlHeight},
+						OnCurrentIndexChanged: w.onHelperChanged,
 					},
-					decl.ComboBox{
-						AssignTo:              &w.quickPauseMouseKey,
-						Model:                 quickPauseMouseNames,
-						CurrentIndex:          qp.MouseKey - 1,
-						MinSize:               decl.Size{Width: 70, Height: ctrlHeight},
-						MaxSize:               decl.Size{Width: 70, Height: ctrlHeight},
-						OnCurrentIndexChanged: w.savePreferences,
-					},
-					decl.Label{Text: "则"},
-					decl.ComboBox{
-						AssignTo:              &w.quickPauseAction,
-						Model:                 quickPauseActionNames,
-						CurrentIndex:          qp.Action - 1,
-						MinSize:               decl.Size{Width: 130, Height: ctrlHeight},
-						MaxSize:               decl.Size{Width: 130, Height: ctrlHeight},
-						OnCurrentIndexChanged: w.savePreferences,
-					},
-					decl.HSpacer{},
-				},
-			},
-			decl.Composite{
-				Layout: decl.HBox{MarginsZero: true, Spacing: 6},
-				Children: []decl.Widget{
-					decl.Label{Text: "单击 / 双击暂停时长："},
-					decl.LineEdit{
-						AssignTo:          &w.quickPauseDelay,
-						Text:              strconv.Itoa(qp.DelayMS),
-						MinSize:           decl.Size{Width: 55, Height: ctrlHeight},
-						MaxSize:           decl.Size{Width: 55, Height: ctrlHeight},
-						OnEditingFinished: w.savePreferences,
-					},
-					decl.Label{Text: "毫秒 (500–5000)"},
-					decl.HSpacer{},
-				},
-			},
-
-			decl.VSpacer{Size: 4},
-
-			// 3. 游戏通用辅助与音效
-			decl.Label{Text: "操作辅助与音效", Font: decl.Font{Bold: true}},
-			decl.Composite{
-				Layout: decl.HBox{MarginsZero: true, Spacing: 6},
-				Children: []decl.Widget{
 					decl.CheckBox{
-						AssignTo:         &w.forceStandCheck,
-						Text:             "连点左键时自动按住站立键：",
-						OnCheckedChanged: w.onForceStandToggled,
-					},
-					decl.PushButton{
-						AssignTo:    &w.forceStandKeyBtn,
-						Text:        "LSHIFT",
-						Font:        decl.Font{Bold: true},
-						MinSize:     decl.Size{Width: 66, Height: ctrlHeight},
-						MaxSize:     decl.Size{Width: 66, Height: ctrlHeight},
-						OnClicked:   func() { w.startCapture(-1, 102) },
-						OnKeyDown:   w.handleGlobalKeyDown,
-						ToolTipText: "强制站立键：点击后按键录入；默认 LSHIFT",
-						ContextMenuItems: []decl.MenuItem{
-							decl.Action{Text: "恢复默认 (LShift)", OnTriggered: func() { w.setForceStandKey("") }},
-							decl.Action{Text: "设为 LShift", OnTriggered: func() { w.setForceStandKey("LSHIFT") }},
-							decl.Action{Text: "设为 LCtrl", OnTriggered: func() { w.setForceStandKey("LCTRL") }},
-							decl.Action{Text: "设为 LAlt", OnTriggered: func() { w.setForceStandKey("LALT") }},
-						},
+						AssignTo:         &w.helperDev,
+						Text:             "开发者详细日志",
+						Checked:          hs.DevMode,
+						OnCheckedChanged: w.onHelperChanged,
 					},
 					decl.HSpacer{},
 				},
 			},
-			decl.CheckBox{
-				AssignTo:         &w.soundCueCheck,
-				Text:             "快捷键切换方案成功时播放提示音",
-				Checked:          w.app.settings.SoundCue,
-				OnCheckedChanged: w.savePreferences,
+			// 助手开关清单
+			decl.Composite{
+				Layout:   decl.VBox{MarginsZero: true, Spacing: 2},
+				Children: checks,
 			},
-			decl.VSpacer{},
+			decl.Label{
+				Text:      "* 城镇助手要求游戏窗口化运行，宏停止时按热键触发",
+				TextColor: walk.RGB(150, 95, 20),
+			},
 		},
 	}
 }
 
-// showMainWindow 由托盘菜单与双击托盘图标调用
 func (a *app) showMainWindow() {
 	if a.win == nil {
 		if err := a.createMainWindow(); err != nil {
@@ -745,7 +773,6 @@ func (a *app) showMainWindow() {
 	}
 }
 
-// switchGameDirect 切换游戏：保存当前配置，切换底层游戏并刷新视图
 func (w *mainWindow) switchGameDirect(gameID string) {
 	if w.loading || gameID == w.app.settings.CurrentGame {
 		return
@@ -755,7 +782,6 @@ func (w *mainWindow) switchGameDirect(gameID string) {
 	w.app.switchGame(gameID)
 }
 
-// loadFromState 用运行期状态初始化并重绘整个窗口
 func (w *mainWindow) loadFromState() {
 	snap := w.app.st.snapshot()
 
@@ -777,13 +803,13 @@ func (w *mainWindow) loadFromState() {
 			w.profileSlots[i] = profileToSlots(p)
 			w.profileNames[i] = p.Name
 			if w.profileNames[i] == "" {
-				w.profileNames[i] = fmt.Sprintf("配置 %d", i+1)
+				w.profileNames[i] = fmt.Sprintf("配置%d", i+1)
 			}
 			w.profileHKs[i] = p.HK
 			w.profileModes[i] = p.Mode
 		} else {
 			w.profileSlots[i] = defaultSlots()
-			w.profileNames[i] = fmt.Sprintf("配置 %d", i+1)
+			w.profileNames[i] = fmt.Sprintf("配置%d", i+1)
 			w.profileHKs[i] = ""
 			w.profileModes[i] = config.ModeConcurrent
 		}
@@ -797,11 +823,8 @@ func (w *mainWindow) loadFromState() {
 		w.profileIdx = 0
 	}
 
-	// 动态更新游戏按钮选中状态
 	w.updateGameButtons()
-
-	// 动态挂载/卸载暗黑3专属「城镇助手」标签页
-	w.updateHelperTabVisibility()
+	w.updateHelperVisibility()
 
 	if err := w.mw.SetTitle(fmt.Sprintf("%s v%s — %s", appName, version, gameDisplayName(w.app.settings.CurrentGame))); err != nil {
 		w.app.log.Printf("[窗口] 设置标题失败：%v", err)
@@ -813,7 +836,6 @@ func (w *mainWindow) loadFromState() {
 	}
 	w.loadForceStand()
 
-	// 将内存数据刷新到每个 Tab 对应的控件中
 	for t := 0; t < maxProfiles; t++ {
 		w.setText(w.profileNameEdits[t], w.profileNames[t])
 		if w.tabWidget != nil && t < w.tabWidget.Pages().Len() {
@@ -840,7 +862,6 @@ func (w *mainWindow) loadFromState() {
 	w.refreshGlobalViews()
 }
 
-// updateGameButtons 刷新横排游戏按钮的高亮与文本
 func (w *mainWindow) updateGameButtons() {
 	cur := w.app.settings.CurrentGame
 	if w.d3Btn != nil {
@@ -866,23 +887,14 @@ func (w *mainWindow) updateGameButtons() {
 	}
 }
 
-// updateHelperTabVisibility 根据当前游戏动态展示或隐藏暗黑3城镇助手页
-func (w *mainWindow) updateHelperTabVisibility() {
-	if w.tabWidget == nil || w.helperTabPage == nil {
-		return
-	}
+// updateHelperVisibility 严格隔离暗黑3专属助手：暗黑3显示，暗黑4与暗黑2隐藏
+func (w *mainWindow) updateHelperVisibility() {
 	isD3 := w.app.settings.CurrentGame == "d3"
-	pages := w.tabWidget.Pages()
-	hasHelper := pages.Contains(w.helperTabPage)
-
-	if isD3 && !hasHelper {
-		_ = pages.Insert(maxProfiles, w.helperTabPage)
-	} else if !isD3 && hasHelper {
-		cur := w.tabWidget.CurrentIndex()
-		if cur == pages.Index(w.helperTabPage) {
-			_ = w.tabWidget.SetCurrentIndex(0)
-		}
-		_ = pages.Remove(w.helperTabPage)
+	if w.helperContainer != nil {
+		w.helperContainer.SetVisible(isD3)
+	}
+	if w.nonD3HintLabel != nil {
+		w.nonD3HintLabel.SetVisible(!isD3)
 	}
 }
 
@@ -900,7 +912,7 @@ func (w *mainWindow) refreshGlobalViews() {
 	for t := 0; t < maxProfiles; t++ {
 		title := w.profileNames[t]
 		if title == "" {
-			title = fmt.Sprintf("配置 %d", t+1)
+			title = fmt.Sprintf("配置%d", t+1)
 		}
 		if w.tabWidget != nil && t < w.tabWidget.Pages().Len() {
 			_ = w.tabWidget.Pages().At(t).SetTitle(title)
@@ -910,7 +922,6 @@ func (w *mainWindow) refreshGlobalViews() {
 	w.refreshStatus()
 }
 
-// refreshStatus 刷新宏运行状态文本与底栏信息
 func (w *mainWindow) refreshStatus() {
 	if w.mw == nil {
 		return
@@ -925,7 +936,7 @@ func (w *mainWindow) refreshStatus() {
 
 	statusText := ""
 	statusColor := walk.RGB(22, 140, 50)
-	if snap.StartMode == 1 { // 仅按下时 (按住生效)
+	if snap.StartMode == 1 {
 		if snap.Engine != nil && snap.Engine.Enabled() {
 			statusText = fmt.Sprintf("● 宏运行中 (按住 %s 生效)", toggleName)
 			statusColor = walk.RGB(230, 90, 10)
@@ -933,7 +944,7 @@ func (w *mainWindow) refreshStatus() {
 			statusText = fmt.Sprintf("● 按住生效模式 (按住 %s 触发)", toggleName)
 			statusColor = walk.RGB(22, 140, 50)
 		}
-	} else { // 懒人模式 (开关切换)
+	} else {
 		switch {
 		case snap.Engine == nil:
 			statusText = "宏就绪 (进入游戏自动生效)"
@@ -952,11 +963,11 @@ func (w *mainWindow) refreshStatus() {
 		w.statusLabel.SetTextColor(statusColor)
 	}
 
-	profName := "配置 1"
+	profName := "配置1"
 	if w.profileIdx >= 0 && w.profileIdx < maxProfiles && w.profileNames[w.profileIdx] != "" {
 		profName = w.profileNames[w.profileIdx]
 	}
-	w.setLabel(w.activeProfLbl, fmt.Sprintf("当前激活：%s", profName))
+	w.setLabel(w.activeProfLbl, fmt.Sprintf("当前激活配置：%s", profName))
 
 	procName := w.app.targetProcessOf(w.app.settings.CurrentGame)
 	if procName == "" {
@@ -980,7 +991,6 @@ func (w *mainWindow) onTabChanged() {
 	}
 }
 
-// autoSave 实时生效并落盘（无保存按钮，全自动执行）
 func (w *mainWindow) autoSave() {
 	if w.loading {
 		return
@@ -988,7 +998,7 @@ func (w *mainWindow) autoSave() {
 	w.flushAllTabs()
 	_ = w.saveToState(true)
 	if w.autoSaveLbl != nil {
-		w.setLabel(w.autoSaveLbl, "✓ 已自动保存")
+		w.setLabel(w.autoSaveLbl, "✓ 实时生效")
 	}
 }
 
@@ -1024,7 +1034,7 @@ func (w *mainWindow) onSlotStrategyChanged(t, s int) {
 	switch slot.Strategy {
 	case strategySpam:
 		if slot.IntervalMS <= 0 {
-			slot.IntervalMS = 250
+			slot.IntervalMS = 300
 		}
 	case strategyBuff:
 		slot.DelayMS = 0
@@ -1197,7 +1207,7 @@ func (w *mainWindow) onProfileNameEdited(t int) {
 	}
 	name := strings.TrimSpace(w.profileNameEdits[t].Text())
 	if name == "" {
-		name = fmt.Sprintf("配置 %d", t+1)
+		name = fmt.Sprintf("配置%d", t+1)
 	}
 	w.profileNames[t] = name
 	if w.tabWidget != nil && t < w.tabWidget.Pages().Len() {
@@ -1337,7 +1347,7 @@ func (w *mainWindow) loadForceStand() {
 	w.setCheckedSilently(w.forceStandCheck, gk.ForceStandEnabled)
 	key := w.forceStandKeyName()
 	if key == "" {
-		key = "—"
+		key = "Shift"
 	}
 	w.setButtonText(w.forceStandKeyBtn, keyNameOfToken(key))
 }
@@ -1377,7 +1387,6 @@ func (w *mainWindow) applyForceStandSettings(gk store.GameKeys) {
 	w.app.log.Printf("[设置] %s 左键自动站立：%s（键 %s）", gameDisplayName(gameID), state, w.forceStandKeyName())
 }
 
-// savePreferences 实时保存并生效「防护与偏好」选项
 func (w *mainWindow) savePreferences() {
 	if w.loading {
 		return
@@ -1402,7 +1411,7 @@ func (w *mainWindow) savePreferences() {
 	w.app.updateQuickPause(qp)
 	w.app.updateSmartPause(smart)
 	if w.autoSaveLbl != nil {
-		w.setLabel(w.autoSaveLbl, "✓ 偏好已更新")
+		w.setLabel(w.autoSaveLbl, "✓ 实时生效")
 	}
 }
 
@@ -1454,7 +1463,7 @@ func (w *mainWindow) onHelperChanged() {
 		return
 	}
 	if w.autoSaveLbl != nil {
-		w.setLabel(w.autoSaveLbl, "✓ 助手设置已更新")
+		w.setLabel(w.autoSaveLbl, "✓ 实时生效")
 	}
 }
 
@@ -1495,7 +1504,7 @@ func (w *mainWindow) saveToState(silent bool) error {
 	for i := 0; i < maxProfiles; i++ {
 		name := w.profileNames[i]
 		if name == "" {
-			name = fmt.Sprintf("配置 %d", i+1)
+			name = fmt.Sprintf("配置%d", i+1)
 		}
 		profs[i] = slotsToProfile(w.profileSlots[i], name, w.profileHKs[i], w.profileModes[i])
 	}
@@ -1526,7 +1535,7 @@ func (w *mainWindow) exportCode() {
 	for i := 0; i < maxProfiles; i++ {
 		name := w.profileNames[i]
 		if name == "" {
-			name = fmt.Sprintf("配置 %d", i+1)
+			name = fmt.Sprintf("配置%d", i+1)
 		}
 		profs[i] = slotsToProfile(w.profileSlots[i], name, w.profileHKs[i], w.profileModes[i])
 	}
