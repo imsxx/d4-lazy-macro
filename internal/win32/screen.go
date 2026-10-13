@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"image"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 var (
@@ -17,12 +19,17 @@ var (
 	procDeleteObject           = gdi32.NewProc("DeleteObject")
 	procDeleteDC               = gdi32.NewProc("DeleteDC")
 	procGetSystemMetrics       = user32.NewProc("GetSystemMetrics")
+	procPrintWindow            = user32.NewProc("PrintWindow")
 )
 
 const (
 	srcCopy      = 0x00CC0020 // BitBlt 的 SRCCOPY
 	dibRGBColors = 0          // GetDIBits 的 DIB_RGB_COLORS
 	biRGB        = 0          // BITMAPINFOHEADER 的 BI_RGB（不压缩）
+
+	// pwRenderFullContent 让 PrintWindow 使用 DWM 的完整内容渲染（Win8.1+），
+	// 比默认标志更可能正确抓取 GPU 合成的窗口。
+	pwRenderFullContent = 0x00000002
 )
 
 type bitmapInfoHeader struct {
@@ -44,15 +51,45 @@ type bitmapInfo struct {
 	Colors [1]uint32
 }
 
-// CaptureRect 截取屏幕绝对物理坐标 (x, y) 起 w×h 的区域，返回 RGBA 图像。
+// CaptureRect 截取屏幕绝对物理坐标 (x, y) 起 w×h 的区域。
 //
-// 与取色（GetPixelColor）同源：都是 GDI 从桌面 DC 抓取公开画面，不读游戏内存、不注入。
-// 因此有同样的前提——目标窗口必须可见且未被遮挡；游戏若运行在「全屏独占」模式下
-// 不参与桌面合成，此时会抓到黑帧（用 -process 模式跑一次即可判断）。
+// 抓的是「桌面合成后的画面」，因此窗口必须可见；被其他窗口遮挡时会抓到遮挡者。
+// 与取色（GetPixelColor）同源，不读游戏内存、不注入。
 func CaptureRect(x, y, w, h int32) (*image.RGBA, error) {
 	if w <= 0 || h <= 0 {
 		return nil, fmt.Errorf("截图区域尺寸无效：%dx%d", w, h)
 	}
+	return captureWith(w, h, func(hdcMem, hdcScreen uintptr) error {
+		ret, _, err := procBitBlt.Call(hdcMem, 0, 0, uintptr(w), uintptr(h),
+			hdcScreen, uintptr(x), uintptr(y), srcCopy)
+		if ret == 0 {
+			return fmt.Errorf("BitBlt 失败：%v", err)
+		}
+		return nil
+	})
+}
+
+// CaptureWindow 截取指定窗口的完整画面（含边框），返回尺寸为 w×h 的图像。
+//
+// 与 CaptureRect 的关键区别：这个走 PrintWindow，是让窗口**自己**把内容画到我们提供的 DC 上，
+// 而不是读桌面合成结果。因此窗口被别的窗口挡住、甚至不在前台也能抓到——这正是「游戏放后台、
+// 前面照常干活」所需要的。代价是它依赖窗口响应 WM_PRINT，改用独占渲染的程序会返回黑帧，
+// 调用方应当用 NonBlackRatio 自检并回退。
+func CaptureWindow(hwnd windows.Handle, w, h int32) (*image.RGBA, error) {
+	if w <= 0 || h <= 0 {
+		return nil, fmt.Errorf("窗口尺寸无效：%dx%d", w, h)
+	}
+	return captureWith(w, h, func(hdcMem, _ uintptr) error {
+		ret, _, err := procPrintWindow.Call(uintptr(hwnd), hdcMem, pwRenderFullContent)
+		if ret == 0 {
+			return fmt.Errorf("PrintWindow 失败：%v", err)
+		}
+		return nil
+	})
+}
+
+// captureWith 建一张 w×h 的 32 位位图，交给 draw 填充后读回 RGBA。
+func captureWith(w, h int32, draw func(hdcMem, hdcScreen uintptr) error) (*image.RGBA, error) {
 	hdcScreen, _, _ := procGetDC.Call(0)
 	if hdcScreen == 0 {
 		return nil, fmt.Errorf("GetDC 失败")
@@ -77,9 +114,8 @@ func CaptureRect(x, y, w, h int32) (*image.RGBA, error) {
 	}
 	defer procSelectObject.Call(hdcMem, old)
 
-	if ret, _, err := procBitBlt.Call(hdcMem, 0, 0, uintptr(w), uintptr(h),
-		hdcScreen, uintptr(x), uintptr(y), srcCopy); ret == 0 {
-		return nil, fmt.Errorf("BitBlt 失败：%v", err)
+	if err := draw(hdcMem, hdcScreen); err != nil {
+		return nil, err
 	}
 
 	var bmi bitmapInfo
@@ -108,6 +144,38 @@ func CaptureRect(x, y, w, h int32) (*image.RGBA, error) {
 	return img, nil
 }
 
+// CropRGBA 从图像里裁出 (x, y) 起 w×h 的子图；越界的部分会被夹到边界内。
+func CropRGBA(src *image.RGBA, x, y, w, h int32) *image.RGBA {
+	if src == nil {
+		return nil
+	}
+	b := src.Bounds()
+	x0, y0 := int(x), int(y)
+	x1, y1 := x0+int(w), y0+int(h)
+	if x0 < 0 {
+		x0 = 0
+	}
+	if y0 < 0 {
+		y0 = 0
+	}
+	if x1 > b.Dx() {
+		x1 = b.Dx()
+	}
+	if y1 > b.Dy() {
+		y1 = b.Dy()
+	}
+	if x1 <= x0 || y1 <= y0 {
+		return nil
+	}
+	dst := image.NewRGBA(image.Rect(0, 0, x1-x0, y1-y0))
+	for row := y0; row < y1; row++ {
+		srcOff := src.PixOffset(x0, row)
+		dstOff := dst.PixOffset(0, row-y0)
+		copy(dst.Pix[dstOff:dstOff+(x1-x0)*4], src.Pix[srcOff:srcOff+(x1-x0)*4])
+	}
+	return dst
+}
+
 // ScreenSize 返回主显示器的物理分辨率。
 func ScreenSize() (w, h int32) {
 	wv, _, _ := procGetSystemMetrics.Call(0) // SM_CXSCREEN
@@ -116,7 +184,7 @@ func ScreenSize() (w, h int32) {
 }
 
 // NonBlackRatio 返回图像中「非纯黑」像素的占比。
-// 用于判断截图是否真的抓到了画面：全屏独占模式或窗口被遮住时会接近 0。
+// 用于自检截图是否真的抓到了画面：全屏独占、窗口被遮挡或黑屏过场时会接近 0。
 func NonBlackRatio(img *image.RGBA) float64 {
 	if img == nil || len(img.Pix) == 0 {
 		return 0

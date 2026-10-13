@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -16,7 +17,62 @@ var (
 	procGetWindowTextW           = user32.NewProc("GetWindowTextW")
 	procGetClassNameW            = user32.NewProc("GetClassNameW")
 	procGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
+	procEnumWindows              = user32.NewProc("EnumWindows")
+	procIsWindowVisible          = user32.NewProc("IsWindowVisible")
+	procGetWindowRect            = user32.NewProc("GetWindowRect")
 )
+
+// WindowRect 是窗口在屏幕上的绝对物理矩形。
+type WindowRect struct {
+	X, Y, Width, Height int32
+}
+
+// FindWindowByProcess 按进程名查找可见的顶层窗口，返回面积最大的那个（游戏主窗口）。
+// 与前台无关：游戏被其他窗口挡住、或玩家切到别处干活时，依然能定位到它。
+func FindWindowByProcess(process string) (windows.Handle, bool) {
+	var best windows.Handle
+	bestArea := 0
+	cb := syscall.NewCallback(func(hwnd uintptr, _ uintptr) uintptr {
+		if vis, _, _ := procIsWindowVisible.Call(hwnd); vis == 0 {
+			return 1 // 继续枚举
+		}
+		var pid uint32
+		_, _, _ = procGetWindowThreadProcessId.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
+		if pid == 0 {
+			return 1
+		}
+		name, err := processName(pid)
+		if err != nil || !MatchProcess(name, process) {
+			return 1
+		}
+		var rc RECT
+		if ret, _, _ := procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&rc))); ret == 0 {
+			return 1
+		}
+		if area := int(rc.Right-rc.Left) * int(rc.Bottom-rc.Top); area > bestArea {
+			bestArea = area
+			best = windows.Handle(hwnd)
+		}
+		return 1
+	})
+	_, _, _ = procEnumWindows.Call(cb, 0)
+	return best, best != 0
+}
+
+// GetWindowRectOf 返回窗口矩形在屏幕上的绝对物理坐标。
+func GetWindowRectOf(hwnd windows.Handle) (WindowRect, bool) {
+	var rc RECT
+	if ret, _, _ := procGetWindowRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&rc))); ret == 0 {
+		return WindowRect{}, false
+	}
+	return WindowRect{X: rc.Left, Y: rc.Top, Width: rc.Right - rc.Left, Height: rc.Bottom - rc.Top}, true
+}
+
+// IsForeground 返回该窗口当前是否位于前台。
+func IsForeground(hwnd windows.Handle) bool {
+	cur, _, _ := procGetForegroundWindow.Call()
+	return cur != 0 && cur == uintptr(hwnd)
+}
 
 // ForegroundWindow 描述当前前台窗口及其进程。
 type ForegroundWindow struct {
