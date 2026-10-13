@@ -75,6 +75,72 @@ func DefaultQuickPause() QuickPauseSettings {
 	}
 }
 
+// 助手功能的默认值与取值范围。
+const (
+	// DefaultHelperHotkey 是触发助手的默认快捷键（与 D3keyHelper 一致）。
+	DefaultHelperHotkey = "F5"
+	// DefaultHelperDelayMS 是动作间隔默认值，对应 D3keyHelper 的「标准」档。
+	DefaultHelperDelayMS = 150
+	HelperMinDelayMS     = 50
+	HelperMaxDelayMS     = 1000
+)
+
+// HelperSettings 是助手功能的设置（工具级，不随分享码分发）。
+//
+// 助手目前是暗黑3 专属能力：界面识别用的取色点与判据都来自暗黑3，其它游戏没有对应数据，
+// 因此调用方需要按游戏过滤。
+type HelperSettings struct {
+	// Hotkey 是触发助手的快捷键（协议键名；留空表示不绑定）。
+	Hotkey string `json:"hotkey,omitempty"`
+	// Enabled 按助手 ID 记录开关；默认全关，需要玩家显式开启。
+	Enabled map[string]bool `json:"enabled,omitempty"`
+	// ReforgeTarget 是重铸助手的目标品质（0 = 只重铸一次）。
+	ReforgeTarget int `json:"reforge_target,omitempty"`
+	// DelayMS 是每个动作之间的等待时长（动画需要时间，太快会丢点击）。
+	DelayMS int `json:"delay_ms,omitempty"`
+	// DevMode 是开发者模式：输出详细日志（每步取色、判定结果、鼠标去向），
+	// 便于玩家复现问题时把日志整段回传。
+	DevMode bool `json:"dev_mode,omitempty"`
+}
+
+// DefaultHelpers 返回助手功能的缺省设置：快捷键 F5，各助手开关默认关闭。
+func DefaultHelpers() HelperSettings {
+	return HelperSettings{Hotkey: DefaultHelperHotkey, DelayMS: DefaultHelperDelayMS}
+}
+
+// IsEnabled 返回指定助手是否启用。
+func (h HelperSettings) IsEnabled(id string) bool {
+	return h.Enabled != nil && h.Enabled[id]
+}
+
+// SetEnabled 设置指定助手的开关；关闭时删除键，避免存档里堆积 false。
+func (h *HelperSettings) SetEnabled(id string, on bool) {
+	if h.Enabled == nil {
+		h.Enabled = map[string]bool{}
+	}
+	if on {
+		h.Enabled[id] = true
+		return
+	}
+	delete(h.Enabled, id)
+}
+
+// validate 校验助手设置。
+func (h HelperSettings) validate() error {
+	if h.Hotkey != "" {
+		if _, err := keys.Parse(h.Hotkey); err != nil {
+			return fmt.Errorf("助手快捷键无效：%v", err)
+		}
+	}
+	if h.DelayMS != 0 && (h.DelayMS < HelperMinDelayMS || h.DelayMS > HelperMaxDelayMS) {
+		return fmt.Errorf("助手动作间隔必须在 %d–%d 毫秒之间，实际 %d", HelperMinDelayMS, HelperMaxDelayMS, h.DelayMS)
+	}
+	if h.ReforgeTarget < 0 || h.ReforgeTarget > 5 {
+		return fmt.Errorf("重铸目标品质取值 %d 无效（0–5）", h.ReforgeTarget)
+	}
+	return nil
+}
+
 // Settings 是工具级设置（不随分享码分发）。
 type Settings struct {
 	CurrentGame string              `json:"current_game"`
@@ -83,6 +149,7 @@ type Settings struct {
 	QuickPause  QuickPauseSettings  `json:"quick_pause,omitempty"` // 快速暂停（全局操作习惯）
 	SmartPause  bool                `json:"smart_pause,omitempty"` // 智能暂停：按 Tab 暂停/恢复，按回车 / T / M 停止宏
 	SoundCue    bool                `json:"sound_cue,omitempty"`   // 切换配置成功时播放提示音
+	Helpers     HelperSettings      `json:"helpers,omitempty"`     // 助手功能（暗黑3 专属）
 }
 
 // DefaultDir 返回默认数据目录（%APPDATA%\diablo-lazy-macro）。
@@ -122,6 +189,13 @@ func (s *Settings) applyDefaults() {
 	}
 	if s.QuickPause.DelayMS == 0 {
 		s.QuickPause.DelayMS = d.DelayMS
+	}
+	h := DefaultHelpers()
+	if s.Helpers.Hotkey == "" {
+		s.Helpers.Hotkey = h.Hotkey
+	}
+	if s.Helpers.DelayMS == 0 {
+		s.Helpers.DelayMS = h.DelayMS
 	}
 }
 
@@ -164,6 +238,9 @@ func (s *Settings) Validate() error {
 		}
 	}
 	if err := s.QuickPause.validate(); err != nil {
+		return err
+	}
+	if err := s.Helpers.validate(); err != nil {
 		return err
 	}
 	return nil

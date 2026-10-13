@@ -14,11 +14,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/imsxx/diablo-lazy-macro/internal/config"
 	"github.com/imsxx/diablo-lazy-macro/internal/engine"
 	"github.com/imsxx/diablo-lazy-macro/internal/games"
+	"github.com/imsxx/diablo-lazy-macro/internal/helper"
 	"github.com/imsxx/diablo-lazy-macro/internal/keys"
 	"github.com/imsxx/diablo-lazy-macro/internal/logx"
 	"github.com/imsxx/diablo-lazy-macro/internal/store"
@@ -55,6 +57,7 @@ type runtimeSnapshot struct {
 	StartMode     int // 0: 懒人模式 (开关切换), 1: 仅按下时 (按住生效)
 	QuickPause    store.QuickPauseSettings
 	SmartPause    bool
+	Helpers       store.HelperSettings
 }
 
 // runtimeState 保存会被 UI 线程与 tick 线程并发访问的状态。
@@ -94,6 +97,12 @@ type app struct {
 	// 智能暂停的轮询状态（仅 tick 线程访问；spPrev 的长度与 smartPauseStopKeys 一致）
 	spTab  bool
 	spPrev [3]bool
+
+	// 助手运行状态：helperHotkeyDown 只在 tick 线程读写；
+	// 另两个会被助手 goroutine 触碰，因此用原子量。
+	helperHotkeyDown bool
+	helperRunning    atomic.Bool
+	helperAbort      atomic.Bool
 
 	toggleAction   *walk.Action
 	profileActions []*walk.Action
@@ -266,7 +275,11 @@ func (a *app) loadGame(gameID string) error {
 	if err != nil {
 		return err
 	}
-	next := runtimeSnapshot{GameID: gameID, TargetProcess: target, QuickPause: a.settings.QuickPause, SmartPause: a.settings.SmartPause}
+	next := runtimeSnapshot{
+		GameID: gameID, TargetProcess: target,
+		QuickPause: a.settings.QuickPause, SmartPause: a.settings.SmartPause,
+		Helpers: a.settings.Helpers,
+	}
 
 	snap, err := store.Load(a.dir, store.ConfigFile(gameID))
 	if err != nil {
@@ -654,6 +667,7 @@ func (a *app) applyConfig(raw *config.Raw, parsed *config.Parsed, profileIdx int
 		StartMode:     startMode,
 		QuickPause:    a.settings.QuickPause,
 		SmartPause:    a.settings.SmartPause,
+		Helpers:       a.settings.Helpers,
 	})
 	if err := a.rebuildMenu(); err != nil {
 		a.log.Printf("[错误] 重建菜单失败：%v", err)
@@ -780,6 +794,8 @@ func (a *app) startTicker() {
 			a.tickQuickPause(snap)
 			// 智能暂停：聊天 / 开地图 / 回城时自动让路
 			a.tickSmartPause(snap)
+			// 助手功能（暗黑3）：按快捷键触发，运行中再按一次打断
+			a.tickHelper(snap)
 
 			fg, err := win32.GetForegroundWindow()
 			foreground := err == nil && win32.MatchProcess(fg.ProcessName, snap.TargetProcess)
@@ -836,6 +852,133 @@ func (a *app) updateSmartPause(on bool) {
 	snap := a.st.snapshot()
 	snap.SmartPause = on
 	a.st.apply(snap)
+}
+
+// updateHelpers 由界面在助手设置变更后调用：更新运行期快照，无需重建引擎。
+func (a *app) updateHelpers(h store.HelperSettings) {
+	snap := a.st.snapshot()
+	snap.Helpers = h
+	a.st.apply(snap)
+}
+
+// helperMouse 把 win32 的鼠标能力接入助手运行时。
+type helperMouse struct{}
+
+func (helperMouse) Position() (int32, int32, error) { return win32.MousePosition() }
+func (helperMouse) Move(x, y int32) error           { return win32.SetMousePos(x, y) }
+func (helperMouse) Tap(vk uint16) error             { return win32.Tap(vk) }
+
+// clientLang 依窗口标题判断客户端语言：标题恰为 "Diablo III" 视为英文原版；
+// 其余语言（含中文）的魔盒界面元素整体上移，坐标需要相应补偿。
+func clientLang(title string) games.D3ClientLang {
+	if title == "Diablo III" {
+		return games.D3ClientEnglish
+	}
+	return games.D3ClientOther
+}
+
+// tickHelper 检测助手快捷键：按一次触发，运行中再按一次打断。
+func (a *app) tickHelper(snap runtimeSnapshot) {
+	vk, err := keys.Parse(snap.Helpers.Hotkey)
+	if err != nil || vk == 0 {
+		a.helperHotkeyDown = false
+		return
+	}
+	if down := win32.KeyPressed(vk); !down {
+		a.helperHotkeyDown = false
+		return
+	}
+	if a.helperHotkeyDown {
+		return // 只认按下沿，等松开再算下一次
+	}
+	a.helperHotkeyDown = true
+
+	if a.helperRunning.Load() {
+		a.helperAbort.Store(true)
+		a.log.Printf("[助手] 收到打断请求，正在停止…")
+		return
+	}
+	a.startHelper(snap)
+}
+
+// startHelper 依据当前界面状态挑选并启动一个助手。
+func (a *app) startHelper(snap runtimeSnapshot) {
+	// 助手目前是暗黑3 专属能力：其它游戏没有对应的界面识别数据。
+	if snap.GameID != "d3" {
+		a.log.Printf("[助手] 助手目前仅支持暗黑3")
+		return
+	}
+	if snap.Engine == nil {
+		return
+	}
+	// 与技能宏互斥（D3keyHelper 也是这样：助手入口先检查宏是否在跑）。
+	if snap.Engine.Enabled() {
+		a.log.Printf("[助手] 技能宏正在运行，已忽略（助手与技能宏互斥，请先停宏）")
+		return
+	}
+	fg, err := win32.GetForegroundWindow()
+	if err != nil || !win32.MatchProcess(fg.ProcessName, snap.TargetProcess) {
+		a.log.Printf("[助手] 游戏不在前台，已忽略")
+		return
+	}
+	w, h, ox, oy, ok := win32.Screen{}.ClientRect(uintptr(fg.Handle))
+	if !ok || w <= 0 || h <= 0 {
+		a.log.Printf("[助手] 无法读取游戏窗口尺寸（请确认游戏以窗口化运行）")
+		return
+	}
+
+	env := &helper.Env{
+		WinW: w, WinH: h, OriginX: ox, OriginY: oy,
+		Lang:    clientLang(fg.Title),
+		Delay:   time.Duration(snap.Helpers.DelayMS) * time.Millisecond,
+		Dev:     snap.Helpers.DevMode,
+		Pixel:   win32.Screen{},
+		Mouse:   helperMouse{},
+		Aborted: func() bool { return a.helperAbort.Load() },
+		Logf:    func(format string, args ...any) { a.log.Printf("[助手] "+format, args...) },
+	}
+
+	task, err := pickHelper(env, snap.Helpers)
+	if err != nil {
+		a.log.Printf("[助手] %v", err)
+		return
+	}
+
+	a.helperRunning.Store(true)
+	a.helperAbort.Store(false)
+	a.log.Printf("[助手] 启动：%s", task.Name())
+	if snap.Helpers.DevMode {
+		a.log.Printf("[助手] 开发者模式开启：客户区 %dx%d @ (%d,%d)，动作间隔 %dms",
+			w, h, ox, oy, snap.Helpers.DelayMS)
+	}
+	go func() {
+		defer a.helperRunning.Store(false)
+		runErr := task.Run(env)
+		if runErr == nil {
+			a.log.Printf("[助手] %s 完成", task.Name())
+			return
+		}
+		if _, aborted := runErr.(helper.AbortError); aborted {
+			a.log.Printf("[助手] 已中断：%v", runErr)
+			return
+		}
+		a.log.Printf("[助手] %s 失败：%v", task.Name(), runErr)
+	}()
+}
+
+// pickHelper 按当前界面状态挑选助手（对应 D3keyHelper 调度器的判定顺序）。
+func pickHelper(env *helper.Env, settings store.HelperSettings) (helper.Helper, error) {
+	at := env.Sampler()
+	if settings.IsEnabled("d3.kanai.reforge") &&
+		games.D3KanaiCubeOpen(env.Lang, at) == games.D3KanaiReforge {
+		return helper.D3Reforge{Target: settings.ReforgeTarget}, nil
+	}
+	if settings.IsEnabled("d3.salvage.quick") {
+		if state, _ := games.D3SalvagePageOpen(at); state == games.D3SalvageReady {
+			return helper.D3QuickSalvage{}, nil
+		}
+	}
+	return nil, fmt.Errorf("当前界面没有可用的助手：请打开铁匠铺的分解页，或卡奈魔盒的重铸页")
 }
 
 // quickPauseDoubleClickWindow 是双击判定的时间窗。

@@ -10,6 +10,7 @@ import (
 	"github.com/imsxx/diablo-lazy-macro/internal/config"
 	"github.com/imsxx/diablo-lazy-macro/internal/games"
 	"github.com/imsxx/diablo-lazy-macro/internal/keys"
+	"github.com/imsxx/diablo-lazy-macro/internal/helper"
 	"github.com/imsxx/diablo-lazy-macro/internal/store"
 
 	"github.com/lxn/walk"
@@ -1111,6 +1112,18 @@ var (
 	quickPauseActionNames  = []string{"暂停按键宏", "暂停宏且连点左键"}
 )
 
+// helperEntry 记录一个助手开关的绑定关系。
+type helperEntry struct {
+	id    string
+	check *walk.CheckBox
+}
+
+// 重铸目标品质的界面选项；下标与 reforgeTargetValues 一一对应。
+var (
+	reforgeTargetNames  = []string{"只重铸一次", "普通传奇", "远古传奇", "神圣装备", "太古传奇"}
+	reforgeTargetValues = []int{0, 2, 3, 4, 5}
+)
+
 // settingsDlg 承载「更多设置」对话框的控件引用。
 type settingsDlg struct {
 	dlg *walk.Dialog
@@ -1123,6 +1136,12 @@ type settingsDlg struct {
 
 	smartPauseCheck *walk.CheckBox
 	soundCueCheck   *walk.CheckBox
+
+	helpers       []helperEntry
+	helperHotkey  *walk.LineEdit
+	helperDelay   *walk.LineEdit
+	helperDev     *walk.CheckBox
+	reforgeTarget *walk.ComboBox
 }
 
 // openExtraSettings 打开「更多设置」对话框。
@@ -1134,7 +1153,7 @@ func (w *mainWindow) openExtraSettings() {
 	dlg := decl.Dialog{
 		AssignTo: &d.dlg,
 		Title:    "更多设置",
-		MinSize:  decl.Size{Width: 470, Height: 400},
+		MinSize:  decl.Size{Width: 470, Height: 560},
 		Layout:   decl.VBox{Margins: decl.Margins{Left: 12, Top: 10, Right: 12, Bottom: 10}, Spacing: 8},
 		Children: []decl.Widget{
 			decl.GroupBox{
@@ -1207,6 +1226,82 @@ func (w *mainWindow) openExtraSettings() {
 			},
 		},
 	}
+	// 助手开关：按注册顺序动态生成，控件引用固定在切片里（切片一次分配，指针稳定）。
+	allHelpers := helper.All()
+	d.helpers = make([]helperEntry, len(allHelpers))
+	helperChecks := make([]decl.Widget, 0, len(allHelpers))
+	for i, h := range allHelpers {
+		d.helpers[i] = helperEntry{id: h.ID()}
+		helperChecks = append(helperChecks, decl.CheckBox{
+			AssignTo: &d.helpers[i].check,
+			Text:     h.Name(),
+			Checked:  w.app.settings.Helpers.IsEnabled(h.ID()),
+		})
+	}
+	targetIdx := 0
+	for i, v := range reforgeTargetValues {
+		if v == w.app.settings.Helpers.ReforgeTarget {
+			targetIdx = i
+			break
+		}
+	}
+
+	extra := []decl.Widget{
+		decl.GroupBox{
+			Title:  "助手功能（暗黑3 专用）",
+			Layout: decl.VBox{Margins: decl.Margins{Left: 10, Top: 8, Right: 10, Bottom: 8}, Spacing: 6},
+			Children: []decl.Widget{
+				decl.Label{
+					Text:      "⚠ 需游戏窗口化运行，且技能宏处于停止状态（助手与宏互斥）",
+					TextColor: walk.RGB(150, 96, 32),
+				},
+				decl.Composite{
+					Layout: decl.HBox{MarginsZero: true, Spacing: 6},
+					Children: []decl.Widget{
+						decl.Label{Text: "触发快捷键："},
+						decl.LineEdit{
+							AssignTo: &d.helperHotkey,
+							Text:     w.app.settings.Helpers.Hotkey,
+							MinSize:  decl.Size{Width: 70},
+							MaxSize:  decl.Size{Width: 70},
+						},
+						decl.Label{Text: "动作间隔："},
+						decl.LineEdit{
+							AssignTo: &d.helperDelay,
+							Text:     strconv.Itoa(w.app.settings.Helpers.DelayMS),
+							MinSize:  decl.Size{Width: 55},
+							MaxSize:  decl.Size{Width: 55},
+						},
+						decl.Label{Text: "毫秒（50–1000）"},
+						decl.HSpacer{},
+					},
+				},
+				decl.Composite{
+					Layout:   decl.HBox{MarginsZero: true, Spacing: 12},
+					Children: helperChecks,
+				},
+				decl.Composite{
+					Layout: decl.HBox{MarginsZero: true, Spacing: 6},
+					Children: []decl.Widget{
+						decl.Label{Text: "重铸目标品质："},
+						decl.ComboBox{
+							AssignTo: &d.reforgeTarget, Model: reforgeTargetNames, CurrentIndex: targetIdx,
+							MinSize: decl.Size{Width: 120}, MaxSize: decl.Size{Width: 120},
+						},
+						decl.CheckBox{
+							AssignTo:    &d.helperDev,
+							Text:        "开发者模式（详细日志）",
+							Checked:     w.app.settings.Helpers.DevMode,
+							ToolTipText: "记录每一步的取色值、判定结果与鼠标去向，便于复现问题时回传日志",
+						},
+						decl.HSpacer{},
+					},
+				},
+			},
+		},
+	}
+	dlg.Children = append(dlg.Children, extra...)
+
 	if err := dlg.Create(w.mw); err != nil {
 		w.fatal(err)
 		return
@@ -1228,13 +1323,35 @@ func (d *settingsDlg) save(w *mainWindow) {
 	w.app.settings.QuickPause = qp
 	w.app.settings.SmartPause = smart
 	w.app.settings.SoundCue = sound
+
+	// 助手设置
+	hs := w.app.settings.Helpers
+	hs.Hotkey = strings.TrimSpace(d.helperHotkey.Text())
+	hs.DelayMS = parseIntField(d.helperDelay, store.HelperMinDelayMS, store.HelperMaxDelayMS, store.DefaultHelperDelayMS)
+	hs.DevMode = d.helperDev.Checked()
+	if idx := d.reforgeTarget.CurrentIndex(); idx >= 0 && idx < len(reforgeTargetValues) {
+		hs.ReforgeTarget = reforgeTargetValues[idx]
+	}
+	hs.Enabled = map[string]bool{}
+	var enabledNames []string
+	for _, e := range d.helpers {
+		if e.check != nil && e.check.Checked() {
+			hs.Enabled[e.id] = true
+			enabledNames = append(enabledNames, e.id)
+		}
+	}
+	w.app.settings.Helpers = hs
+
 	if err := store.SaveSettings(w.app.dir, *w.app.settings); err != nil {
 		w.fatal(err)
 		return
 	}
 	w.app.updateQuickPause(qp)
 	w.app.updateSmartPause(smart)
+	w.app.updateHelpers(hs)
 	w.app.log.Printf("[设置] 智能暂停：%s；音效提示：%s", onOffText(smart), onOffText(sound))
+	w.app.log.Printf("[设置] 助手快捷键：%s；动作间隔：%dms；开发者模式：%s；已启用：%v",
+		hs.Hotkey, hs.DelayMS, onOffText(hs.DevMode), enabledNames)
 	state := "关闭"
 	if qp.Enabled {
 		state = "开启"
