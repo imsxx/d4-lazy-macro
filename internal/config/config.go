@@ -18,9 +18,9 @@ import (
 
 const (
 	// Prefix 是当前版本分享码前缀，字母大小写不敏感；其后为 base64url 编码的紧凑 JSON。
-	Prefix = "DLM2:"
+	Prefix = "DLM3:"
 	// Version 是当前协议版本。
-	Version = 2
+	Version = 3
 	// MinVersion 是仍可解析的最旧协议版本（旧分享码与旧存档可继续使用）。
 	MinVersion = 1
 
@@ -42,6 +42,13 @@ const (
 	StrategyHold     = 1 // 按住不放
 	StrategySpam     = 2 // 连点
 	StrategyBuff     = 3 // 保持Buff（需要屏幕守卫）
+)
+
+// 触发模式：决定连点类技能是各自独立计时，还是按槽位顺序一轮一轮触发。
+// 两者是玩家能直接感知的行为差异（罗技/雷蛇式顺序宏 vs 独立计时），因此对用户可见。
+const (
+	ModeConcurrent = "con" // 并发（默认）：各技能独立计时，到点即按，互不影响
+	ModeSequential = "seq" // 循环：按槽位顺序一轮一轮按，一轮走完再从第一条继续
 )
 
 // ActionKind 是规则动作类型。
@@ -68,6 +75,7 @@ type Raw struct {
 type RawProfile struct {
 	Name  string    `json:"n,omitempty"`
 	HK    string    `json:"hk,omitempty"` // 方案切换键（仅键盘键，可留空）
+	Mode  string    `json:"m,omitempty"`  // 触发模式：seq 循环 / con 并发（缺省即并发）
 	Rules []RawRule `json:"r"`
 }
 
@@ -94,6 +102,7 @@ type Parsed struct {
 type ParsedProfile struct {
 	Name     string
 	SwitchVK uint16
+	Mode     string // 触发模式：ModeSequential / ModeConcurrent
 	Rules    []ParsedRule
 }
 
@@ -254,7 +263,11 @@ func resolve(raw *Raw) (*Parsed, error) {
 		if len(rp.Rules) < 1 || len(rp.Rules) > maxRulesPerProfile {
 			return nil, fmt.Errorf("方案 #%d 的规则数量必须在 1–%d 之间，实际 %d", pi+1, maxRulesPerProfile, len(rp.Rules))
 		}
-		pp := ParsedProfile{Name: rp.Name}
+		mode, err := normalizeMode(pi+1, rp.Mode)
+		if err != nil {
+			return nil, err
+		}
+		pp := ParsedProfile{Name: rp.Name, Mode: mode}
 		if hk := strings.TrimSpace(rp.HK); hk != "" {
 			vk, err := keys.Parse(hk)
 			if err != nil {
@@ -377,6 +390,9 @@ func UpgradeLegacy(r *Raw) {
 		return
 	}
 	for pi := range r.Profiles {
+		if r.Profiles[pi].Mode == "" {
+			r.Profiles[pi].Mode = ModeConcurrent
+		}
 		for ri := range r.Profiles[pi].Rules {
 			rule := &r.Profiles[pi].Rules[ri]
 			if rule.Strategy != StrategyDisabled {
@@ -429,6 +445,18 @@ func resolveRuleTuning(where string, r RawRule, rule *ParsedRule) error {
 		rule.Buff = true
 	}
 	return nil
+}
+
+// normalizeMode 校验并归一化方案的触发模式；空值表示并发（默认）。
+func normalizeMode(profileNo int, mode string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", ModeConcurrent:
+		return ModeConcurrent, nil
+	case ModeSequential:
+		return ModeSequential, nil
+	default:
+		return "", fmt.Errorf("方案 #%d 的触发模式 %q 无效（应为 seq 循环 或 con 并发）", profileNo, mode)
+	}
 }
 
 func checkName(field, name string) error {

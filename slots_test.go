@@ -38,7 +38,7 @@ func TestSlotConversionStrategies(t *testing.T) {
 	// Slot 3: 禁用
 	slots[3].Strategy = 0
 
-	prof := slotsToProfile(slots, "测试方案", "F9")
+	prof := slotsToProfile(slots, "测试方案", "F9", config.ModeConcurrent)
 	if prof.Name != "测试方案" || prof.HK != "F9" {
 		t.Fatalf("方案元数据不符：%+v", prof)
 	}
@@ -85,7 +85,7 @@ func TestSlotStrategySurvivesRoundTrip(t *testing.T) {
 	slots[0].Strategy = strategyBuff
 	slots[0].IntervalMS = 300
 
-	prof := slotsToProfile(slots, "守卫往返", "")
+	prof := slotsToProfile(slots, "守卫往返", "", config.ModeConcurrent)
 	raw := config.Raw{Version: config.Version, Profiles: []config.RawProfile{prof}}
 	parsed, err := config.Resolve(raw)
 	if err != nil {
@@ -108,7 +108,7 @@ func TestSlotDelaySurvivesRoundTrip(t *testing.T) {
 	slots[0].DelayMS = -40
 	slots[0].RandomDelay = true
 
-	prof := slotsToProfile(slots, "延迟往返", "")
+	prof := slotsToProfile(slots, "延迟往返", "", config.ModeConcurrent)
 	raw := config.Raw{Version: config.Version, Profiles: []config.RawProfile{prof}}
 	parsed, err := config.Resolve(raw)
 	if err != nil {
@@ -133,7 +133,7 @@ func TestSlotBuffDropsDelay(t *testing.T) {
 	slots[1].DelayMS = 100
 	slots[1].RandomDelay = true
 
-	prof := slotsToProfile(slots, "buff 干净字段", "")
+	prof := slotsToProfile(slots, "buff 干净字段", "", config.ModeConcurrent)
 	raw := config.Raw{Version: config.Version, Profiles: []config.RawProfile{prof}}
 	parsed, err := config.Resolve(raw)
 	if err != nil {
@@ -153,7 +153,7 @@ func TestSlotRandomDelayRequiresDelay(t *testing.T) {
 	slots[0].DelayMS = 0
 	slots[0].RandomDelay = true
 
-	prof := slotsToProfile(slots, "无延迟随机", "")
+	prof := slotsToProfile(slots, "无延迟随机", "", config.ModeConcurrent)
 	raw := config.Raw{Version: config.Version, Profiles: []config.RawProfile{prof}}
 	if _, err := config.Resolve(raw); err != nil {
 		t.Fatalf("无延迟时不应写出 rd：%v", err)
@@ -176,5 +176,33 @@ func TestSlotStrategyInferredFromLegacyConfig(t *testing.T) {
 	}
 	if slots[0].Strategy != strategySpam {
 		t.Errorf("连点推断错误：%d", slots[0].Strategy)
+	}
+}
+
+func TestProfileModeRoundTrip(t *testing.T) {
+	slots := defaultSlots()
+	slots[0].Strategy = strategySpam
+	slots[0].IntervalMS = 150
+
+	prof := slotsToProfile(slots, "循环模式", "", config.ModeSequential)
+	raw := config.Raw{Version: config.Version, Profiles: []config.RawProfile{prof}}
+	parsed, err := config.Resolve(raw)
+	if err != nil {
+		t.Fatalf("循环模式配置应当合法：%v", err)
+	}
+	if parsed.Profiles[0].Mode != config.ModeSequential {
+		t.Fatalf("循环模式未写入协议：%+v", parsed.Profiles[0])
+	}
+}
+
+func TestProfileModeDefaultsToConcurrent(t *testing.T) {
+	// 缺省（空字符串）归一化为并发：旧配置的既有行为不变。
+	prof := config.RawProfile{Rules: []config.RawRule{{Trigger: "t", Action: "tap:1", IntervalMS: 250}}}
+	parsed, err := config.Resolve(config.Raw{Version: config.Version, Profiles: []config.RawProfile{prof}})
+	if err != nil {
+		t.Fatalf("缺省模式应当合法：%v", err)
+	}
+	if parsed.Profiles[0].Mode != config.ModeConcurrent {
+		t.Fatalf("缺省模式应为并发，实际 %q", parsed.Profiles[0].Mode)
 	}
 }

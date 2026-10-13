@@ -49,6 +49,11 @@ type Engine struct {
 	rules       []ruleState
 	buffChecker func(vk uint16) bool
 
+	// 顺序（循环按键）模式的调度状态：游标指向下一个候选规则，seqNext 是下一次发送时刻。
+	mode      string
+	seqCursor int
+	seqNext   time.Time
+
 	// randIntn 是延迟随机使用的随机源；默认 math/rand.Intn，测试可替换为确定性实现。
 	randIntn func(n int) int
 }
@@ -77,6 +82,12 @@ func New(sender Sender, state KeyState, cfg *config.Parsed, onError func(error))
 
 func (e *Engine) loadProfileLocked(i int) {
 	e.profile = i
+	e.mode = e.cfg.Profiles[i].Mode
+	if e.mode == "" {
+		e.mode = config.ModeConcurrent
+	}
+	e.seqCursor = 0
+	e.seqNext = time.Time{}
 	rules := e.cfg.Profiles[i].Rules
 	e.rules = make([]ruleState, 0, len(rules))
 	for _, r := range rules {
@@ -185,20 +196,13 @@ func (e *Engine) releaseHoldsLocked() {
 func (e *Engine) Tick(now time.Time, foreground bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.mode == config.ModeSequential {
+		e.tickSequentialLocked(now, foreground)
+		return
+	}
 	for i := range e.rules {
 		st := &e.rules[i]
-		active := e.enabled && foreground
-		if active && st.rule.HoldVK != 0 {
-			active = e.state.Pressed(st.rule.HoldVK)
-		}
-		if active != st.active {
-			st.active = active
-			if active {
-				e.activateLocked(st, now)
-			} else {
-				e.deactivateLocked(st)
-			}
-		}
+		e.updateActiveLocked(st, now, foreground)
 		if !st.active {
 			continue
 		}
@@ -213,6 +217,63 @@ func (e *Engine) Tick(now time.Time, foreground bool) {
 			}
 		}
 	}
+}
+
+// updateActiveLocked 依据总开关、前台与按住触发键维护一条规则的激活状态。
+func (e *Engine) updateActiveLocked(st *ruleState, now time.Time, foreground bool) {
+	active := e.enabled && foreground
+	if active && st.rule.HoldVK != 0 {
+		active = e.state.Pressed(st.rule.HoldVK)
+	}
+	if active == st.active {
+		return
+	}
+	st.active = active
+	if active {
+		e.activateLocked(st, now)
+	} else {
+		e.deactivateLocked(st)
+	}
+}
+
+// tickSequentialLocked 顺序（循环按键）模式：
+// 按住/单点类规则仍按各自语义独立维持；连点类规则按槽位顺序轮流触发，
+// 每条规则触发后等待自己的执行间隔，一轮走完再从第一条继续——即罗技/雷蛇式顺序宏的心智。
+func (e *Engine) tickSequentialLocked(now time.Time, foreground bool) {
+	for i := range e.rules {
+		st := &e.rules[i]
+		if st.rule.Kind == config.ActionTap {
+			continue // 连点由顺序轮统一调度
+		}
+		e.updateActiveLocked(st, now, foreground)
+	}
+	if !e.enabled || !foreground || len(e.rules) == 0 {
+		return
+	}
+	if now.Before(e.seqNext) {
+		return
+	}
+	// 从游标处找下一条可发送的连点规则：触发键未按住、或 Buff 仍在生效的规则跳过，游标继续前进。
+	for n := 0; n < len(e.rules); n++ {
+		st := &e.rules[e.seqCursor%len(e.rules)]
+		e.seqCursor = (e.seqCursor + 1) % len(e.rules)
+		if st.rule.Kind != config.ActionTap {
+			continue
+		}
+		if st.rule.HoldVK != 0 && !e.state.Pressed(st.rule.HoldVK) {
+			continue
+		}
+		if e.buffGateLocked(st) {
+			continue
+		}
+		if err := e.sender.Tap(st.rule.Keys[0]); err != nil {
+			e.onError(err)
+		}
+		e.seqNext = now.Add(e.delayOffsetLocked(st.rule) + time.Duration(st.rule.IntervalMS)*time.Millisecond)
+		return
+	}
+	// 一轮下来没有任何技能可发送（全部被 Buff 守卫拦下）：稍后重试。
+	e.seqNext = now.Add(buffResampleDelay)
 }
 
 // tickTapLocked 推进连点策略：周期起点 → 延迟偏移 → 发送 → 周期推进。

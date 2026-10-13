@@ -272,3 +272,74 @@ func TestBuffGuardOnlyAppliesToBuffRules(t *testing.T) {
 	e.Tick(base, true)
 	expectEvents(t, sender, "tap:1")
 }
+
+// newTestEngineWithMode 构造指定触发模式的引擎。
+func newTestEngineWithMode(t *testing.T, mode string, rules []config.ParsedRule) (*Engine, *fakeSender, fakeKeys, *[]string) {
+	t.Helper()
+	sender := &fakeSender{}
+	state := fakeKeys{}
+	var errs []string
+	e, err := New(sender, state, &config.Parsed{
+		ToggleVK: 0x70,
+		Profiles: []config.ParsedProfile{{Mode: mode, Rules: rules}},
+	}, func(err error) { errs = append(errs, err.Error()) })
+	if err != nil {
+		t.Fatalf("New 失败：%v", err)
+	}
+	return e, sender, state, &errs
+}
+
+func TestSequentialModeCyclesRules(t *testing.T) {
+	// 循环模式：按规则顺序一轮一轮按，每条规则触发后等待自己的间隔，一轮走完从头再来。
+	e, sender, _, _ := newTestEngineWithMode(t, config.ModeSequential, []config.ParsedRule{
+		{Kind: config.ActionTap, Keys: []uint16{0x31}, IntervalMS: 100},
+		{Kind: config.ActionTap, Keys: []uint16{0x32}, IntervalMS: 200},
+	})
+	e.SetEnabled(true)
+	e.Tick(base, true)
+	expectEvents(t, sender, "tap:1")
+	e.Tick(base.Add(100*time.Millisecond), true)
+	expectEvents(t, sender, "tap:1", "tap:2")
+	// 技能2 的间隔是 200ms：到 300ms 才轮到技能1（一轮走完，从头继续）
+	e.Tick(base.Add(299*time.Millisecond), true)
+	expectEvents(t, sender, "tap:1", "tap:2")
+	e.Tick(base.Add(300*time.Millisecond), true)
+	expectEvents(t, sender, "tap:1", "tap:2", "tap:1")
+}
+
+func TestSequentialModeSkipsBuffActiveRule(t *testing.T) {
+	// 轮到某技能时其 Buff 仍在生效：跳过它，本轮直接轮到下一条。
+	e, sender, _, _ := newTestEngineWithMode(t, config.ModeSequential, []config.ParsedRule{
+		{Kind: config.ActionTap, Keys: []uint16{0x31}, IntervalMS: 100, Buff: true},
+		{Kind: config.ActionTap, Keys: []uint16{0x32}, IntervalMS: 100},
+	})
+	e.SetBuffChecker(func(vk uint16) bool { return vk == 0x31 })
+	e.SetEnabled(true)
+	e.Tick(base, true)
+	expectEvents(t, sender, "tap:2")
+}
+
+func TestSequentialModeKeepsHoldIndependent(t *testing.T) {
+	// 按住类技能不参与顺序轮：仍按自身语义保持按下，失活时立即释放。
+	e, sender, _, _ := newTestEngineWithMode(t, config.ModeSequential, []config.ParsedRule{
+		{Kind: config.ActionHold, Keys: []uint16{0x02}},
+		{Kind: config.ActionTap, Keys: []uint16{0x31}, IntervalMS: 100},
+	})
+	e.SetEnabled(true)
+	e.Tick(base, true)
+	expectEvents(t, sender, "down:RMB", "tap:1")
+	e.SetEnabled(false)
+	e.Tick(base.Add(50*time.Millisecond), true)
+	expectEvents(t, sender, "down:RMB", "tap:1", "up:RMB")
+}
+
+func TestSequentialModeRespectsForeground(t *testing.T) {
+	e, sender, _, _ := newTestEngineWithMode(t, config.ModeSequential, []config.ParsedRule{
+		{Kind: config.ActionTap, Keys: []uint16{0x31}, IntervalMS: 100},
+	})
+	e.SetEnabled(true)
+	e.Tick(base, false)
+	expectEvents(t, sender)
+	e.Tick(base.Add(10*time.Millisecond), true)
+	expectEvents(t, sender, "tap:1")
+}

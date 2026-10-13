@@ -20,8 +20,8 @@ const (
 	maxProfiles = 4
 	numSlots    = 6
 
-	// 左栏容纳 6 列槽位参数，右栏固定 300，再加外边距与栏间距。
-	fixedWinWidth  = 800
+	// 左栏容纳 6 列槽位参数与每方案设置，右栏固定 300，再加外边距与栏间距。
+	fixedWinWidth  = 890
 	fixedWinHeight = 540
 )
 
@@ -57,6 +57,12 @@ var strategyNames = []string{
 var startModeNames = []string{
 	"懒人模式 (开关切换)",
 	"仅按下时 (按住生效)",
+}
+
+// 按键触发模式：下标 0 = 并发（默认），1 = 循环。
+var modeNames = []string{
+	"并发按键",
+	"循环按键",
 }
 
 type skillSlotData struct {
@@ -112,6 +118,8 @@ type mainWindow struct {
 	// 4个配置对应的设置项
 	profileNameEdits [maxProfiles]*walk.LineEdit
 	switchKeyBtns    [maxProfiles]*walk.PushButton
+	modeComs         [maxProfiles]*walk.ComboBox
+	profileModes     [maxProfiles]string
 
 	// 内存状态：4个配置各对应一套 6 个技能槽位
 	profileSlots [maxProfiles][numSlots]skillSlotData
@@ -171,8 +179,8 @@ func (a *app) createMainWindow() error {
 				Children: []decl.Widget{
 					// ================= 左栏：方案技能与按键设置 =================
 					decl.Composite{
-						MinSize: decl.Size{Width: 450},
-						MaxSize: decl.Size{Width: 450},
+						MinSize: decl.Size{Width: 545},
+						MaxSize: decl.Size{Width: 545},
 						Layout:  decl.VBox{MarginsZero: true, Spacing: 4},
 						Children: []decl.Widget{
 							decl.TabWidget{
@@ -414,6 +422,15 @@ func (w *mainWindow) createTabPage(tabIdx int) decl.TabPage {
 							decl.Action{Text: "❌ 清除切换键 (设为无)", OnTriggered: func() { w.clearSwitchKey(t) }},
 						},
 					},
+					decl.Label{Text: "按键模式：", MinSize: decl.Size{Width: 65}},
+					decl.ComboBox{
+						AssignTo:              &w.modeComs[t],
+						Model:                 modeNames,
+						MinSize:               decl.Size{Width: 115},
+						MaxSize:               decl.Size{Width: 115},
+						OnCurrentIndexChanged: func() { w.onProfileModeChanged(t) },
+						ToolTipText:           "并发按键：各技能各自计时、到点就按，互不影响（默认）\n循环按键：按槽位顺序一轮一轮按，一轮走完从头再来（罗技/雷蛇式顺序宏）",
+					},
 					decl.HSpacer{},
 				},
 			},
@@ -518,10 +535,12 @@ func (w *mainWindow) loadFromState() {
 				w.profileNames[i] = fmt.Sprintf("配置 %d", i+1)
 			}
 			w.profileHKs[i] = p.HK
+			w.profileModes[i] = p.Mode
 		} else {
 			w.profileSlots[i] = defaultSlots()
 			w.profileNames[i] = fmt.Sprintf("配置 %d", i+1)
 			w.profileHKs[i] = ""
+			w.profileModes[i] = config.ModeConcurrent
 		}
 	}
 
@@ -539,6 +558,9 @@ func (w *mainWindow) loadFromState() {
 
 	w.setCombo(w.gameCombo, gameNames(), gameIndex(w.app.settings.CurrentGame))
 	w.setCombo(w.startModeCombo, startModeNames, w.startMode)
+	for t := 0; t < maxProfiles; t++ {
+		w.setCombo(w.modeComs[t], modeNames, modeToIndex(w.profileModes[t]))
+	}
 
 	// 将内存数据刷新到每个 Tab 对应的控件中
 	for t := 0; t < maxProfiles; t++ {
@@ -660,6 +682,11 @@ func (w *mainWindow) flushAllTabs() {
 	}
 	if w.startModeCombo != nil {
 		w.startMode = w.startModeCombo.CurrentIndex()
+	}
+	for t := 0; t < maxProfiles; t++ {
+		if w.modeComs[t] != nil {
+			w.profileModes[t] = indexToMode(w.modeComs[t].CurrentIndex())
+		}
 	}
 }
 
@@ -825,6 +852,28 @@ func (w *mainWindow) onSlotIntervalChanged(t, s int) {
 	if n, err := strconv.Atoi(text); err == nil && n > 0 {
 		slot.IntervalMS = n
 	}
+}
+
+// modeToIndex / indexToMode 在协议模式常量与界面下拉下标之间转换：下标 0 = 并发（默认），1 = 循环。
+func modeToIndex(mode string) int {
+	if mode == config.ModeSequential {
+		return 1
+	}
+	return 0
+}
+
+func indexToMode(idx int) string {
+	if idx == 1 {
+		return config.ModeSequential
+	}
+	return config.ModeConcurrent
+}
+
+func (w *mainWindow) onProfileModeChanged(t int) {
+	if w.loading || w.modeComs[t] == nil {
+		return
+	}
+	w.profileModes[t] = indexToMode(w.modeComs[t].CurrentIndex())
 }
 
 func (w *mainWindow) onProfileNameEdited(t int) {
@@ -1001,7 +1050,7 @@ func (w *mainWindow) saveToState(silent bool) error {
 		if name == "" {
 			name = fmt.Sprintf("配置 %d", i+1)
 		}
-		profs[i] = slotsToProfile(w.profileSlots[i], name, w.profileHKs[i])
+		profs[i] = slotsToProfile(w.profileSlots[i], name, w.profileHKs[i], w.profileModes[i])
 	}
 
 	w.raw.Version = config.Version
@@ -1053,7 +1102,7 @@ func (w *mainWindow) exportCode() {
 		if name == "" {
 			name = fmt.Sprintf("配置 %d", i+1)
 		}
-		profs[i] = slotsToProfile(w.profileSlots[i], name, w.profileHKs[i])
+		profs[i] = slotsToProfile(w.profileSlots[i], name, w.profileHKs[i], w.profileModes[i])
 	}
 	w.raw.Profiles = profs
 
@@ -1205,7 +1254,7 @@ func clampInterval(v, fallback int) int {
 	return v
 }
 
-func slotsToProfile(slots [numSlots]skillSlotData, name string, switchKey string) config.RawProfile {
+func slotsToProfile(slots [numSlots]skillSlotData, name string, switchKey string, mode string) config.RawProfile {
 	rules := make([]config.RawRule, 0, numSlots)
 
 	for _, s := range slots {
@@ -1249,6 +1298,7 @@ func slotsToProfile(slots [numSlots]skillSlotData, name string, switchKey string
 	return config.RawProfile{
 		Name:  name,
 		HK:    switchKey,
+		Mode:  mode,
 		Rules: rules,
 	}
 }
