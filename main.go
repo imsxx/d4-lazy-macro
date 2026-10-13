@@ -972,9 +972,13 @@ func pickHelper(env *helper.Env, settings store.HelperSettings) (helper.Helper, 
 	if settings.IsEnabled("d3.gamble") && games.D3GambleOpen(at) {
 		return helper.D3Gamble{}, nil
 	}
-	if settings.IsEnabled("d3.kanai.reforge") &&
-		games.D3KanaiCubeOpen(env.Lang, at) == games.D3KanaiReforge {
+	kanai := games.D3KanaiCubeOpen(env.Lang, at)
+	if settings.IsEnabled("d3.kanai.reforge") && kanai == games.D3KanaiReforge {
 		return helper.D3Reforge{Target: settings.ReforgeTarget}, nil
+	}
+	if settings.IsEnabled("d3.kanai.upgrade_convert") &&
+		(kanai == games.D3KanaiUpgrade || kanai == games.D3KanaiConvert) {
+		return helper.D3KanaiUpgradeConvert{}, nil
 	}
 	if settings.IsEnabled("d3.salvage.quick") {
 		if state, _ := games.D3SalvagePageOpen(at); state == games.D3SalvageReady {
