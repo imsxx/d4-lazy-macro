@@ -238,6 +238,33 @@ func D3DialogOnScreen(at D3ColorAt) bool {
 	return red(c1) && red(c2)
 }
 
+// D3MouseZone 表示鼠标当前所处的区域：助手据此决定对背包还是储物箱下手，
+// 玩家因此不需要任何额外配置（D3keyHelper 的设计）。
+type D3MouseZone int
+
+const (
+	D3ZoneNone  D3MouseZone = iota // 界面空白处
+	D3ZoneBag                      // 背包（屏幕右侧）
+	D3ZoneStash                    // 储物箱 / 银行（屏幕左侧）
+)
+
+// D3MouseZoneAt 判断客户区相对坐标 (relX, relY) 落在哪个区域。
+func D3MouseZoneAt(relX, relY, winW, winH int32) D3MouseZone {
+	if winW <= 0 || winH <= 0 {
+		return D3ZoneNone
+	}
+	scale := float64(winH) / d3RefHeight
+	x, y := float64(relX), float64(relY)
+	// 背包在右侧：x 从右边缘倒推
+	if x > float64(winW)-(d3RefWidth-2740)*scale && y > 730*scale && y < 1150*scale {
+		return D3ZoneBag
+	}
+	if x > 65*scale && x < 640*scale && y > 275*scale && y < 1150*scale {
+		return D3ZoneStash
+	}
+	return D3ZoneNone
+}
+
 func absInt(v int) int {
 	if v < 0 {
 		return -v

@@ -11,12 +11,12 @@ import "math"
 // 基准分辨率同为 3440x1440，一律按 D3H/1440 等比缩放；背包位于屏幕右侧，
 // 因此它的横坐标是从右边缘倒推的（与脚本相同）。
 
-// D3Zone 标识格子所属区域。
-type D3Zone int
+// D3Grid 标识格子所属区域（与 D3MouseZone 区分：后者是鼠标热区）。
+type D3Grid int
 
 const (
-	D3ZoneBag   D3Zone = iota // 玩家背包：10 列 x 6 行
-	D3ZoneKanai               // 卡奈魔盒：3 列 x 3 行
+	D3GridBag   D3Grid = iota // 玩家背包：10 列 x 6 行
+	D3GridKanai               // 卡奈魔盒：3 列 x 3 行
 )
 
 // D3Point 是一个客户区相对坐标点。
@@ -43,7 +43,7 @@ type D3SlotPoint struct {
 }
 
 // D3InventorySlotXY 计算背包/魔盒中第 id 个格子的坐标，id 从 1 开始、按行优先编号。
-func D3InventorySlotXY(id int, zone D3Zone, winW, winH int32) (D3SlotPoint, bool) {
+func D3InventorySlotXY(id int, grid D3Grid, winW, winH int32) (D3SlotPoint, bool) {
 	if id < 1 || winW <= 0 || winH <= 0 {
 		return D3SlotPoint{}, false
 	}
@@ -53,14 +53,14 @@ func D3InventorySlotXY(id int, zone D3Zone, winW, winH int32) (D3SlotPoint, bool
 		baseY     float64
 		fromRight bool
 	)
-	switch zone {
-	case D3ZoneBag:
+	switch grid {
+	case D3GridBag:
 		cols, fromRight = len(d3BagColumnX), true
 		if id > cols*len(d3BagRowY) {
 			return D3SlotPoint{}, false
 		}
 		baseX, baseY = d3BagColumnX[(id-1)%cols], d3BagRowY[(id-1)/cols]
-	case D3ZoneKanai:
+	case D3GridKanai:
 		cols = len(d3KanaiColumnX)
 		if id > cols*len(d3KanaiRowY) {
 			return D3SlotPoint{}, false

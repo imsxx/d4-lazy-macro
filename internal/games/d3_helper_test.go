@@ -8,35 +8,35 @@ func TestD3InventorySlotXYReferenceResolution(t *testing.T) {
 	cases := []struct {
 		name string
 		id   int
-		zone D3Zone
+		grid D3Grid
 		want D3SlotPoint
 	}{
 		{
 			// CenterX = 3440 - (3440-2753-32) = 2785；CenterY = 747+31.5 = 778.5 -> 779
-			name: "背包第 1 格（左上角）", id: 1, zone: D3ZoneBag,
+			name: "背包第 1 格（左上角）", id: 1, grid: D3GridBag,
 			want: D3SlotPoint{CenterX: 2785, CenterY: 779, OuterX: 2753, OuterY: 747},
 		},
 		{
-			name: "背包第 10 格（右上角）", id: 10, zone: D3ZoneBag,
+			name: "背包第 10 格（右上角）", id: 10, grid: D3GridBag,
 			want: D3SlotPoint{CenterX: 3389, CenterY: 779, OuterX: 3357, OuterY: 747},
 		},
 		{
 			// 第 11 格换行：第 2 行第 1 列
-			name: "背包第 11 格（第二行首）", id: 11, zone: D3ZoneBag,
+			name: "背包第 11 格（第二行首）", id: 11, grid: D3GridBag,
 			want: D3SlotPoint{CenterX: 2785, CenterY: 845, OuterX: 2753, OuterY: 813},
 		},
 		{
 			// 魔盒在左侧：CenterX = 242+32 = 274
-			name: "魔盒第 1 格", id: 1, zone: D3ZoneKanai,
+			name: "魔盒第 1 格", id: 1, grid: D3GridKanai,
 			want: D3SlotPoint{CenterX: 274, CenterY: 535, OuterX: 242, OuterY: 503},
 		},
 		{
-			name: "魔盒第 4 格（第二行首）", id: 4, zone: D3ZoneKanai,
+			name: "魔盒第 4 格（第二行首）", id: 4, grid: D3GridKanai,
 			want: D3SlotPoint{CenterX: 274, CenterY: 611, OuterX: 242, OuterY: 579},
 		},
 	}
 	for _, c := range cases {
-		got, ok := D3InventorySlotXY(c.id, c.zone, 3440, 1440)
+		got, ok := D3InventorySlotXY(c.id, c.grid, 3440, 1440)
 		if !ok {
 			t.Fatalf("%s：计算失败", c.name)
 		}
@@ -48,7 +48,7 @@ func TestD3InventorySlotXYReferenceResolution(t *testing.T) {
 
 func TestD3InventorySlotXYScalesWithHeight(t *testing.T) {
 	// 实机客户区 1817x1025（scale = 1025/1440 ≈ 0.711806）
-	got, ok := D3InventorySlotXY(1, D3ZoneBag, 1817, 1025)
+	got, ok := D3InventorySlotXY(1, D3GridBag, 1817, 1025)
 	if !ok {
 		t.Fatal("计算失败")
 	}
@@ -63,17 +63,17 @@ func TestD3InventorySlotXYRejectsOutOfRange(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		id   int
-		zone D3Zone
+		grid D3Grid
 		w, h int32
 	}{
-		{"背包第 61 格", 61, D3ZoneBag, 3440, 1440},
-		{"魔盒第 10 格", 10, D3ZoneKanai, 3440, 1440},
-		{"编号 0", 0, D3ZoneBag, 3440, 1440},
-		{"未知区域", 1, D3Zone(9), 3440, 1440},
-		{"宽度为 0", 1, D3ZoneBag, 0, 1440},
-		{"高度为 0", 1, D3ZoneBag, 3440, 0},
+		{"背包第 61 格", 61, D3GridBag, 3440, 1440},
+		{"魔盒第 10 格", 10, D3GridKanai, 3440, 1440},
+		{"编号 0", 0, D3GridBag, 3440, 1440},
+		{"未知区域", 1, D3Grid(9), 3440, 1440},
+		{"宽度为 0", 1, D3GridBag, 0, 1440},
+		{"高度为 0", 1, D3GridBag, 3440, 0},
 	} {
-		if _, ok := D3InventorySlotXY(c.id, c.zone, c.w, c.h); ok {
+		if _, ok := D3InventorySlotXY(c.id, c.grid, c.w, c.h); ok {
 			t.Errorf("%s 应被拒绝", c.name)
 		}
 	}
