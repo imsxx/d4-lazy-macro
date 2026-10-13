@@ -8,7 +8,7 @@
 </head>
 <body>
   <!-- 顶栏：自定义无边框拖拽标题栏 + 窗口控制 -->
-  <header class="app-header">
+  <header class="app-header" id="appHeader">
     <div class="header-brand">
       <span class="brand-badge">DLM</span>
       <span class="brand-title">暗黑懒人宏</span>
@@ -27,6 +27,10 @@
       <button class="tool-btn" onclick="importCode()" title="从剪贴板导入分享码">导入分享码</button>
       <button class="tool-btn" onclick="exportCode()" title="将当前配置复制为分享码">复制分享码</button>
       <button class="tool-btn" onclick="openLog()" title="查看运行日志">运行日志</button>
+      <div class="win-controls">
+        <button class="win-btn win-min" onclick="minimizeWindow()" title="最小化到托盘">—</button>
+        <button class="win-btn win-close" onclick="closeWindow()" title="隐藏到托盘">✕</button>
+      </div>
     </div>
   </header>
 
@@ -223,10 +227,17 @@
   </footer>
 
   <!-- 按键录入浮层模态框 -->
-  <div class="capture-overlay" id="captureOverlay" style="display: none;">
+  <div class="capture-overlay" id="captureOverlay" style="display: none;" onclick="onOverlayClick(event)">
     <div class="capture-box">
-      <div class="capture-title">请按下任意键盘按键或鼠标键</div>
-      <div class="capture-sub">（按 Escape 取消录入）</div>
+      <div class="capture-title">请按下任意键盘按键，或快捷选取鼠标按键</div>
+      <div class="capture-mouse-options">
+        <button class="tool-btn" onclick="applyCapturedKey('LMB')">鼠标左键</button>
+        <button class="tool-btn" onclick="applyCapturedKey('RMB')">鼠标右键</button>
+        <button class="tool-btn" onclick="applyCapturedKey('MMB')">鼠标中键</button>
+        <button class="tool-btn" onclick="applyCapturedKey('X1')">侧键1 (X1)</button>
+        <button class="tool-btn" onclick="applyCapturedKey('X2')">侧键2 (X2)</button>
+      </div>
+      <div class="capture-sub">（按 Escape 或点击背景取消）</div>
       <div class="capture-pulse"></div>
     </div>
   </div>

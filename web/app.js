@@ -8,31 +8,56 @@ const strategyNames = ['禁用', '按住不放', '连点', '保持Buff'];
 
 // 初始化入口
 window.addEventListener('DOMContentLoaded', async () => {
-  try {
-    await reloadState();
-  } catch (err) {
-    console.error('初始化失败:', err);
+  // 顶栏无边框原生拖拽
+  const header = document.getElementById('appHeader');
+  if (header) {
+    header.addEventListener('mousedown', (e) => {
+      if (e.target.closest('button, input, select, label')) {
+        return;
+      }
+      if (e.button === 0 && typeof window.api_dragWindow === 'function') {
+        window.api_dragWindow();
+      }
+    });
   }
 
   // 全局键盘监听，用于按键录入
   window.addEventListener('keydown', handleKeyDown);
+
+  // 加载数据
+  reloadState();
 });
 
 // 从 Go 后端加载最新状态并渲染
 async function reloadState() {
   if (typeof window.api_getState !== 'function') {
-    console.warn('Go API 尚未注入，等待中...');
+    setTimeout(reloadState, 30);
     return;
   }
-  state = await window.api_getState();
-  currentTab = state.currentProfileIdx || 0;
-  renderAll();
+  try {
+    state = await window.api_getState();
+    if (!state) {
+      setTimeout(reloadState, 50);
+      return;
+    }
+    currentTab = state.currentProfileIdx || 0;
+    renderAll();
+  } catch (err) {
+    console.error('获取初始状态失败，稍后重试:', err);
+    setTimeout(reloadState, 100);
+  }
 }
 
 // 供 Go 后端主动调用的状态更新通知
 window.onStateUpdate = function(newState) {
   state = newState;
-  renderStatusAndHeader();
+  if (!state) return;
+  const container = document.getElementById('slotList');
+  if (!container || container.children.length === 0) {
+    renderAll();
+  } else {
+    renderStatusAndHeader();
+  }
 };
 
 function renderAll() {
@@ -322,24 +347,14 @@ function captureForceStandKey() {
   openCaptureModal({ type: 'forceStand' });
 }
 
-async function handleKeyDown(e) {
-  if (!capturingTarget) return;
-
-  e.preventDefault();
-  e.stopPropagation();
-
-  if (e.key === 'Escape') {
+function onOverlayClick(e) {
+  if (e.target && e.target.id === 'captureOverlay') {
     closeCaptureModal();
-    return;
   }
+}
 
-  // 映射按键名
-  let token = e.key.toUpperCase();
-  if (token === ' ') token = 'SPACE';
-  if (token === 'CONTROL') token = 'LCTRL';
-  if (token === 'SHIFT') token = 'LSHIFT';
-  if (token === 'ALT') token = 'LALT';
-
+async function applyCapturedKey(token) {
+  if (!capturingTarget) return;
   const t = capturingTarget;
   closeCaptureModal();
 
@@ -360,6 +375,27 @@ async function handleKeyDown(e) {
     await window.api_updatePreference(state.smartPause, state.soundCue, state.forceStandEnabled, token);
     renderPreferences();
   }
+}
+
+async function handleKeyDown(e) {
+  if (!capturingTarget) return;
+
+  e.preventDefault();
+  e.stopPropagation();
+
+  if (e.key === 'Escape') {
+    closeCaptureModal();
+    return;
+  }
+
+  // 映射按键名
+  let token = e.key.toUpperCase();
+  if (token === ' ') token = 'SPACE';
+  if (token === 'CONTROL') token = 'LCTRL';
+  if (token === 'SHIFT') token = 'LSHIFT';
+  if (token === 'ALT') token = 'LALT';
+
+  await applyCapturedKey(token);
 }
 
 // 快捷操作

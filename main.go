@@ -128,7 +128,7 @@ func main() {
 		if n, convErr := strconv.Atoi(ms); convErr == nil && n > 0 {
 			go func() {
 				time.Sleep(time.Duration(n) * time.Millisecond)
-				a.mw.Synchronize(func() { _ = a.mw.Close() })
+				a.sync(func() { a.quitApp() })
 			}()
 		}
 	}
@@ -222,6 +222,10 @@ func (a *app) run() int {
 			fmt.Fprintln(os.Stderr, "[日志] 关闭失败：", err)
 		}
 	}()
+	if a.win != nil && a.win.wv != nil {
+		a.win.wv.Run()
+		return 0
+	}
 	return a.mw.Run()
 }
 
@@ -230,10 +234,19 @@ func (a *app) quitApp() {
 	if a.win != nil {
 		a.win.quitting = true
 		if a.win.wv != nil {
+			a.win.wv.Terminate()
 			a.win.wv.Destroy()
 		}
 	}
 	_ = a.mw.Close()
+}
+
+func (a *app) sync(f func()) {
+	if a.win != nil && a.win.wv != nil {
+		a.win.wv.Dispatch(f)
+		return
+	}
+	a.mw.Synchronize(f)
 }
 
 // owner 返回对话框应使用的宿主窗口。
@@ -541,7 +554,7 @@ func (a *app) refreshUI() {
 }
 
 func (a *app) refreshUIAsync() {
-	a.mw.Synchronize(a.refreshUI)
+	a.sync(a.refreshUI)
 }
 
 // afterStateChange 在任何改变运行状态的动作后统一刷新界面。
@@ -788,7 +801,7 @@ func (a *app) startTicker() {
 					if down && !prevSwitch[i] && i != current {
 						idx := i
 						a.log.Printf("[热键] %s → 切换方案 %s", keyName(vk), profileDisplayName(snap.Engine, idx))
-						a.mw.Synchronize(func() { a.switchProfile(idx) })
+						a.sync(func() { a.switchProfile(idx) })
 					}
 					prevSwitch[i] = down
 				}
@@ -1093,7 +1106,7 @@ func (a *app) notifyEngineError(err error) {
 	if skip {
 		return
 	}
-	a.mw.Synchronize(func() {
+	a.sync(func() {
 		if a.ni != nil {
 			if showErr := a.ni.ShowError(appName, "按键发送失败：\n"+err.Error()); showErr != nil {
 				a.log.Printf("[托盘] 错误提示失败：%v", showErr)

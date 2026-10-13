@@ -40,6 +40,7 @@ body {
   height: 100vh;
   display: flex;
   flex-direction: column;
+  border: 1px solid #2b2e38;
 }
 
 /* ================= 顶栏 Header ================= */
@@ -50,7 +51,6 @@ body {
   display: flex;
   align-items: center;
   padding: 0 12px;
-  -webkit-app-region: drag; /* 允许拖拽移动窗口 */
 }
 
 .header-brand {
@@ -89,7 +89,6 @@ body {
   border-radius: 6px;
   padding: 2px;
   margin-left: 20px;
-  -webkit-app-region: no-drag;
 }
 
 .game-btn {
@@ -120,7 +119,6 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  -webkit-app-region: no-drag;
 }
 
 .tool-btn {
@@ -549,6 +547,13 @@ body {
   font-weight: bold;
   color: #fff;
   margin-bottom: 6px;
+}
+
+.capture-mouse-options {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  margin: 12px 0 10px;
 }
 
 .capture-sub {

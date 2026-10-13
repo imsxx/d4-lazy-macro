@@ -27,6 +27,11 @@ var (
 	procSetForeground    = user32DLL.NewProc("SetForegroundWindow")
 	procSetWindowLongPtr = user32DLL.NewProc("SetWindowLongPtrW")
 	procCallWindowProc   = user32DLL.NewProc("CallWindowProcW")
+	procGetWindowLong    = user32DLL.NewProc("GetWindowLongW")
+	procSetWindowLong    = user32DLL.NewProc("SetWindowLongW")
+	procSetWindowPos     = user32DLL.NewProc("SetWindowPos")
+	procReleaseCapture   = user32DLL.NewProc("ReleaseCapture")
+	procSendMessageW     = user32DLL.NewProc("SendMessageW")
 )
 
 const (
@@ -39,8 +44,23 @@ const (
 	SW_HIDE     = 0
 	SW_SHOW     = 5
 	SW_MINIMIZE = 6
+)
 
-	WM_CLOSE     = 0x0010
+const (
+	WS_CAPTION     = 0x00C00000
+	WS_THICKFRAME  = 0x00040000
+	WS_MINIMIZEBOX = 0x00020000
+	WS_MAXIMIZEBOX = 0x00010000
+
+	SWP_NOSIZE       = 0x0001
+	SWP_NOMOVE       = 0x0002
+	SWP_NOZORDER     = 0x0004
+	SWP_FRAMECHANGED = 0x0020
+	SWP_SHOWWINDOW   = 0x0040
+
+	WM_CLOSE         = 0x0010
+	WM_NCLBUTTONDOWN = 0x00A1
+	HTCAPTION        = 2
 )
 
 const (
@@ -188,6 +208,7 @@ func (a *app) createMainWindow() error {
 	w.hwnd = uintptr(wv.Window())
 	a.win = w
 
+	w.removeSystemTitlebar()
 	w.subclass()
 	w.initBindings()
 
@@ -197,6 +218,26 @@ func (a *app) createMainWindow() error {
 
 	a.log.Printf("[窗口] 现代 WebView2 电竞 UI 初始化完成（固定尺寸 %dx%d）", fixedWinWidth, fixedWinHeight)
 	return nil
+}
+
+func (w *mainWindow) removeSystemTitlebar() {
+	if w.hwnd == 0 {
+		return
+	}
+	gwl := -16
+	gwlStyle := uintptr(gwl)
+	style, _, _ := procGetWindowLong.Call(w.hwnd, gwlStyle)
+	style &^= (WS_CAPTION | WS_THICKFRAME | WS_MAXIMIZEBOX)
+	procSetWindowLong.Call(w.hwnd, gwlStyle, style)
+
+	procSetWindowPos.Call(
+		w.hwnd,
+		0,
+		0, 0,
+		uintptr(fixedWinWidth),
+		uintptr(fixedWinHeight),
+		uintptr(SWP_NOMOVE|SWP_NOZORDER|SWP_FRAMECHANGED|SWP_SHOWWINDOW),
+	)
 }
 
 func (w *mainWindow) subclass() {
@@ -233,6 +274,12 @@ func (w *mainWindow) subclass() {
 
 // initBindings 将 Go 方法暴露给前端 JS
 func (w *mainWindow) initBindings() {
+	_ = w.wv.Bind("api_dragWindow", func() error {
+		procReleaseCapture.Call()
+		procSendMessageW.Call(w.hwnd, uintptr(WM_NCLBUTTONDOWN), uintptr(HTCAPTION), 0)
+		return nil
+	})
+
 	_ = w.wv.Bind("api_getState", func() (*frontendState, error) {
 		return w.buildFrontendState(), nil
 	})
