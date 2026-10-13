@@ -684,6 +684,9 @@ func (a *app) switchProfile(i int) {
 			walk.MsgBoxOK|walk.MsgBoxIconWarning)
 	}
 	a.refreshUI()
+	if a.settings.SoundCue {
+		win32.PlaySoundCue() // 切换成功给一声听觉反馈
+	}
 	a.log.Printf("[切换] 方案 → %s", profileDisplayName(snap.Engine, i))
 }
 

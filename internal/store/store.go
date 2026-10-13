@@ -82,6 +82,7 @@ type Settings struct {
 	GameKeys    map[string]GameKeys `json:"game_keys,omitempty"`   // 各游戏的按键映射（强制站立等）
 	QuickPause  QuickPauseSettings  `json:"quick_pause,omitempty"` // 快速暂停（全局操作习惯）
 	SmartPause  bool                `json:"smart_pause,omitempty"` // 智能暂停：按 Tab 暂停/恢复，按回车 / T / M 停止宏
+	SoundCue    bool                `json:"sound_cue,omitempty"`   // 切换配置成功时播放提示音
 }
 
 // DefaultDir 返回默认数据目录（%APPDATA%\diablo-lazy-macro）。

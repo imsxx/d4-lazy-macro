@@ -1113,6 +1113,7 @@ type settingsDlg struct {
 	quickPauseDelay    *walk.LineEdit
 
 	smartPauseCheck *walk.CheckBox
+	soundCueCheck   *walk.CheckBox
 }
 
 // openExtraSettings 打开「更多设置」对话框。
@@ -1124,7 +1125,7 @@ func (w *mainWindow) openExtraSettings() {
 	dlg := decl.Dialog{
 		AssignTo: &d.dlg,
 		Title:    "更多设置",
-		MinSize:  decl.Size{Width: 470, Height: 345},
+		MinSize:  decl.Size{Width: 470, Height: 400},
 		Layout:   decl.VBox{Margins: decl.Margins{Left: 12, Top: 10, Right: 12, Bottom: 10}, Spacing: 8},
 		Children: []decl.Widget{
 			decl.GroupBox{
@@ -1175,6 +1176,18 @@ func (w *mainWindow) openExtraSettings() {
 					},
 				},
 			},
+			decl.GroupBox{
+				Title:  "音效提示",
+				Layout: decl.VBox{Margins: decl.Margins{Left: 10, Top: 8, Right: 10, Bottom: 8}, Spacing: 6},
+				Children: []decl.Widget{
+					decl.CheckBox{
+						AssignTo:    &d.soundCueCheck,
+						Text:        "快捷键切换配置成功时播放提示音",
+						Checked:     w.app.settings.SoundCue,
+						ToolTipText: "在游戏里用切换键换方案时，不必切出画面就能靠声音确认是否切换成功",
+					},
+				},
+			},
 			decl.Composite{
 				Layout: decl.HBox{MarginsZero: true, Spacing: 8},
 				Children: []decl.Widget{
@@ -1202,15 +1215,17 @@ func (d *settingsDlg) save(w *mainWindow) {
 		DelayMS:  parseIntField(d.quickPauseDelay, store.QuickPauseMinDelayMS, store.QuickPauseMaxDelayMS, store.DefaultQuickPause().DelayMS),
 	}
 	smart := d.smartPauseCheck.Checked()
+	sound := d.soundCueCheck.Checked()
 	w.app.settings.QuickPause = qp
 	w.app.settings.SmartPause = smart
+	w.app.settings.SoundCue = sound
 	if err := store.SaveSettings(w.app.dir, *w.app.settings); err != nil {
 		w.fatal(err)
 		return
 	}
 	w.app.updateQuickPause(qp)
 	w.app.updateSmartPause(smart)
-	w.app.log.Printf("[设置] 智能暂停：%s", onOffText(smart))
+	w.app.log.Printf("[设置] 智能暂停：%s；音效提示：%s", onOffText(smart), onOffText(sound))
 	state := "关闭"
 	if qp.Enabled {
 		state = "开启"
