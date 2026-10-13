@@ -7,7 +7,7 @@
 ## 形式
 
 ```
-DLM3:eyJ2IjozLCJnIjoiZDMiLCJuIjoi5pqX6buRMyDpgJ_liLciLCJhIjoi5p-QQkTkvZzogIUiLCJ0ZyI6IkYxIiwicCI6W3sibiI6IumAn-WItyIsIm0iOiJzZXEiLCJyIjpbeyJ0ZyI6InQiLCJhIjoidGFwOjIiLCJpIjozMDAsInN0IjozfSx7InRnIjoidCIsImEiOiJob2xkOlJNQiJ9LHsidGciOiJ0IiwiYSI6InRhcDoxIiwiaSI6MTUwLCJzdCI6MiwiZCI6LTQwLCJyZCI6dHJ1ZX1dfV19
+DLM3:eyJ2IjozLCJnIjoiZDMiLCJuIjoi5pqX6buRMyDpgJ_liLciLCJhIjoi5p-QQkTkvZzogIUiLCJ0ZyI6IlgxIiwicCI6W3sibiI6IumAn-WItyIsIm0iOiJzZXEiLCJyIjpbeyJ0ZyI6InQiLCJhIjoidGFwOjIiLCJpIjozMDAsInN0IjozfSx7InRnIjoidCIsImEiOiJob2xkOlJNQiJ9LHsidGciOiJ0IiwiYSI6InRhcDoxIiwiaSI6MTUwLCJzdCI6MiwiZCI6LTQwLCJyZCI6dHJ1ZX1dfV19
 ```
 
 - `DLM<版本>:` 为前缀（字母大小写不敏感）；v3 工具接受 `DLM1` / `DLM2` / `DLM3`，前缀声明的版本必须与正文 `v` 一致
@@ -21,6 +21,19 @@ DLM3:eyJ2IjozLCJnIjoiZDMiLCJuIjoi5pqX6buRMyDpgJ_liLciLCJhIjoi5p-QQkTkvZzogIUiLCJ
 - Base64url 字符集（`A-Za-z0-9-_`）不会被聊天工具识别为链接或触发格式化
 - 透明性由工具侧保证：**应用前会渲染一份人类可读摘要**（规则逐条翻译成人话）供用户核对，导入后也可再次导出查看
 
+## 为什么默认启停键是鼠标侧键
+
+游戏的默认键位会占用不少键盘键，撞键会导致「按一下同时触发游戏功能与宏开关」。三款暗黑游戏的默认键位：
+
+| 键 | 暗黑4 | 暗黑3 | 暗黑2R |
+| --- | --- | --- | --- |
+| `F1` | 未绑定 | **收藏（Collection）** | 未绑定 |
+| `F2`–`F12` | 未绑定 | 未绑定 | 未绑定 |
+| `Shift` | 原地站立 | 强制站立 | 站定不动 |
+| 鼠标额外按键 | 未使用 | 未使用 | 未使用 |
+
+所以默认取 **`X1`（鼠标侧键 1）**：三款游戏都不占用鼠标额外按键；而且在「仅按下时」的启动方式下，按住侧键比按住键盘功能键省力得多。启停键可在工具内随时改（键盘键与鼠标键都支持），方案切换键 `hk` 则仍限键盘键。
+
 ## 字段
 
 ### 顶层
@@ -31,7 +44,7 @@ DLM3:eyJ2IjozLCJnIjoiZDMiLCJuIjoi5pqX6buRMyDpgJ_liLciLCJhIjoi5p-QQkTkvZzogIUiLCJ
 | `g` | 否 | 游戏标识：`d4` / `d3` / `d2r`；仅作提示，导入时与当前游戏不一致只提示不阻断 |
 | `n` | 否 | 配置名，≤ 24 字符 |
 | `a` | 否 | 作者署名，≤ 24 字符 |
-| `tg` | 否 | 全局启停键，默认 `F1`（不支持鼠标键） |
+| `tg` | 否 | 全局启停键，默认 `X1`（鼠标侧键 1）；键盘键与鼠标键均可，理由见上一节 |
 | `p` | 是 | 方案数组，1–4 个 |
 
 ### 方案 `p[]`
@@ -70,7 +83,7 @@ DLM3:eyJ2IjozLCJnIjoiZDMiLCJuIjoi5pqX6buRMyDpgJ_liLciLCJhIjoi5p-QQkTkvZzogIUiLCJ
 
 ## 运行时语义（工具行为，不可由分享码配置）
 
-- **总开关**：`tg` 键（默认 `F1`）是主控。关闭时任何规则都不触发；开启后 `t` 规则持续运行，`h` 规则在按住时触发
+- **总开关**：`tg` 键（默认 `X1` 鼠标侧键）是主控。关闭时任何规则都不触发；开启后 `t` 规则持续运行，`h` 规则在按住时触发
 - **前台保护**：仅当目标游戏进程（可在编辑器里按游戏修改，默认见 README）位于前台时发送；目标失去前台、宏关闭、程序退出时，**所有按住（`hold`）中的键立即释放**，避免按键卡死
 - **按键模式**（方案级）：
   - `con` **并发**（默认）：各连点规则**独立计时**，各自到点就按、互不影响
@@ -85,16 +98,16 @@ DLM3:eyJ2IjozLCJnIjoiZDMiLCJuIjoi5pqX6buRMyDpgJ_liLciLCJhIjoi5p-QQkTkvZzogIUiLCJ
 ## 示例
 
 ```
-DLM3:eyJ2IjozLCJnIjoiZDMiLCJuIjoi5pqX6buRMyDpgJ_liLciLCJhIjoi5p-QQkTkvZzogIUiLCJ0ZyI6IkYxIiwicCI6W3sibiI6IumAn-WItyIsIm0iOiJzZXEiLCJyIjpbeyJ0ZyI6InQiLCJhIjoidGFwOjIiLCJpIjozMDAsInN0IjozfSx7InRnIjoidCIsImEiOiJob2xkOlJNQiJ9LHsidGciOiJ0IiwiYSI6InRhcDoxIiwiaSI6MTUwLCJzdCI6MiwiZCI6LTQwLCJyZCI6dHJ1ZX1dfV19
+DLM3:eyJ2IjozLCJnIjoiZDMiLCJuIjoi5pqX6buRMyDpgJ_liLciLCJhIjoi5p-QQkTkvZzogIUiLCJ0ZyI6IlgxIiwicCI6W3sibiI6IumAn-WItyIsIm0iOiJzZXEiLCJyIjpbeyJ0ZyI6InQiLCJhIjoidGFwOjIiLCJpIjozMDAsInN0IjozfSx7InRnIjoidCIsImEiOiJob2xkOlJNQiJ9LHsidGciOiJ0IiwiYSI6InRhcDoxIiwiaSI6MTUwLCJzdCI6MiwiZCI6LTQwLCJyZCI6dHJ1ZX1dfV19
 ```
 
 解码后等价于：
 
 ```json
-{"v":3,"g":"d3","n":"暗黑3 速刷","a":"某BD作者","tg":"F1","p":[{"n":"速刷","m":"seq","r":[{"tg":"t","a":"tap:2","i":300,"st":3},{"tg":"t","a":"hold:RMB"},{"tg":"t","a":"tap:1","i":150,"st":2,"d":-40,"rd":true}]}]}
+{"v":3,"g":"d3","n":"暗黑3 速刷","a":"某BD作者","tg":"X1","p":[{"n":"速刷","m":"seq","r":[{"tg":"t","a":"tap:2","i":300,"st":3},{"tg":"t","a":"hold:RMB"},{"tg":"t","a":"tap:1","i":150,"st":2,"d":-40,"rd":true}]}]}
 ```
 
-读法：暗黑3 配置，`F1` 开启后——采用**循环按键**模式（一条一条按）：技能 2 为**保持Buff**（由发光环取色守卫按需补放，Buff 未断则跳过）；全程按住右键不放（引导类技能）；技能 1 **连点**，间隔 150ms 且**延迟 -40ms（时隙末尾前发送）+ 随机化**。
+读法：暗黑3 配置，按鼠标侧键 1（`X1`）开启后——采用**循环按键**模式（一条一条按）：技能 2 为**保持Buff**（由发光环取色守卫按需补放，Buff 未断则跳过）；全程按住右键不放（引导类技能）；技能 1 **连点**，间隔 150ms 且**延迟 -40ms（时隙末尾前发送）+ 随机化**。
 
 ## 校验规则（Fail Fast）
 
@@ -105,7 +118,7 @@ DLM3:eyJ2IjozLCJnIjoiZDMiLCJuIjoi5pqX6buRMyDpgJ_liLciLCJhIjoi5p-QQkTkvZzogIUiLCJ
 3. JSON 必须能解析、**无未知字段**、无多余尾巴
 4. `v` 必须在支持范围内（不匹配直接拒绝并提示升级）；`g` 若出现必须在 `d4` / `d3` / `d2r` 之内
 5. `n` / `a` ≤ 24 字符；方案数 1–4；每方案规则数 1–8
-6. `tg` 只接受 `t` 或 `h:<合法键名>`；`a` 的动作类型与键名必须在白名单内，序列 ≤ 6 键；`hk` 若出现必须是合法键盘键（不支持鼠标键，理由同 `tg`）
+6. `tg` 只接受 `t` 或 `h:<合法键名>`；`a` 的动作类型与键名必须在白名单内，序列 ≤ 6 键；`hk` 若出现必须是**合法键盘键**（仅键盘键，避免与鼠标操作冲突）
 7. `tap` / `seq` 的 `i` 必须在 [20, 600000]；`once` / `hold` 不允许出现 `i`
 8. `d` 在 [-30000, 30000]；`rd` 必须与 `d != 0` 同时出现；`d` / `rd` 仅 `tap` 允许
 9. `st` 在 [0, 3]；显式声明时必须与动作相容：`1` 要求 `hold:`，`2` 要求 `tap:`，`3` 要求 `tap:`
@@ -116,6 +129,7 @@ DLM3:eyJ2IjozLCJnIjoiZDMiLCJuIjoi5pqX6buRMyDpgJ_liLciLCJhIjoi5p-QQkTkvZzogIUiLCJ
 
 - **v1 → v2**（2026-10-13）：规则新增 `st` / `d` / `rd`（释放策略、延迟、延迟随机）；v1 码字段语义不变
 - **v2 → v3**（2026-10-13）：方案新增 `m`（按键模式：`con` 并发 / `seq` 循环）。这是**玩家能直接感知的行为差异**，与「顺序宏」的心智对齐，因此对用户可见；v1 / v2 码仍可解析，缺省为 `con`
+- **v3 定稿期调整**（2026-10-13）：`tg` 的默认值由 `F1` 改为 `X1`（鼠标侧键 1），并**解除启停键不支持鼠标键的限制**。依据见「为什么默认启停键是鼠标侧键」——暗黑3 的 `F1` 是「收藏」、`Shift` 在三款都是「强制站立」，而鼠标额外按键游戏默认都不占用。`hk`（方案切换键）仍限键盘键；`tg` 显式给出时照旧解析，旧码不受影响
 - v2 定稿过程中曾短暂引入 `rp` / `ri` / `pr`（重复次数、重复间隔、优先级）。这三个概念属于宏的内部机制、且与「按轮循环触发」的模型重复，因此**已回收**：
   - 界面不再提供对应列
   - 协议不再接受这三个字段（出现即拒绝）

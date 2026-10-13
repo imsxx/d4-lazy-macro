@@ -216,20 +216,19 @@ func (a *app) createMainWindow() error {
 												MinSize: decl.Size{Width: 100},
 											},
 											decl.PushButton{
-												AssignTo:  &w.toggleKeyBtn,
-												Text:      "F1",
-												Font:      decl.Font{Bold: true, PointSize: 10},
-												MinSize:   decl.Size{Width: 90, Height: 30},
-												MaxSize:   decl.Size{Width: 90, Height: 30},
-												OnClicked: func() { w.startCapture(-1, 100) },
-												OnKeyDown: w.handleGlobalKeyDown,
-												ToolTipText: "左键点击捕获按键；右键菜单可快速绑定鼠标侧键(X1/X2)或中键",
+												AssignTo:    &w.toggleKeyBtn,
+												Text:        "X1",
+												Font:        decl.Font{Bold: true, PointSize: 10},
+												MinSize:     decl.Size{Width: 90, Height: 30},
+												MaxSize:     decl.Size{Width: 90, Height: 30},
+												OnClicked:   func() { w.startCapture(-1, 100) },
+												OnKeyDown:   w.handleGlobalKeyDown,
+												ToolTipText: "左键点击捕获按键；右键菜单可快速绑定鼠标侧键(X1/X2)或中键\n默认 X1（鼠标侧键）：三款暗黑游戏的默认键位都不占用鼠标额外按键",
 												ContextMenuItems: []decl.MenuItem{
 													decl.Action{Text: "🖱️ 设为 鼠标侧键1 (X1)", OnTriggered: func() { w.setToggleKey("X1") }},
 													decl.Action{Text: "🖱️ 设为 鼠标侧键2 (X2)", OnTriggered: func() { w.setToggleKey("X2") }},
 													decl.Action{Text: "🖱️ 设为 鼠标中键 (MMB)", OnTriggered: func() { w.setToggleKey("MMB") }},
 													decl.Separator{},
-													decl.Action{Text: "⌨️ 设为 F1", OnTriggered: func() { w.setToggleKey("F1") }},
 													decl.Action{Text: "⌨️ 设为 F2", OnTriggered: func() { w.setToggleKey("F2") }},
 													decl.Action{Text: "⌨️ 设为 ` (波浪号)", OnTriggered: func() { w.setToggleKey("`") }},
 												},
@@ -593,7 +592,7 @@ func (w *mainWindow) refreshGlobalViews() {
 	snap := w.app.st.snapshot()
 	toggleKey := w.raw.Toggle
 	if toggleKey == "" {
-		toggleKey = "F1"
+		toggleKey = config.DefaultToggleKey
 	}
 	if snap.ToggleVK != 0 {
 		toggleKey = keyName(snap.ToggleVK)
@@ -619,7 +618,7 @@ func (w *mainWindow) refreshStatus() {
 		return
 	}
 	snap := w.app.st.snapshot()
-	toggleName := "F1"
+	toggleName := config.DefaultToggleKey
 	if snap.ToggleVK != 0 {
 		toggleName = keyName(snap.ToggleVK)
 	} else if w.raw.Toggle != "" {
@@ -935,7 +934,7 @@ func (w *mainWindow) cancelCapture() {
 	case s == 100:
 		tk := w.raw.Toggle
 		if tk == "" {
-			tk = "F1"
+			tk = config.DefaultToggleKey
 		}
 		w.setButtonText(btn, keyNameOfToken(tk))
 	case s == 101 && t >= 0 && t < maxProfiles:
@@ -1057,7 +1056,7 @@ func (w *mainWindow) saveToState(silent bool) error {
 	w.raw.Game = w.app.settings.CurrentGame
 	w.raw.Profiles = profs
 	if w.raw.Toggle == "" {
-		w.raw.Toggle = "F1"
+		w.raw.Toggle = config.DefaultToggleKey
 	}
 
 	raw := w.raw

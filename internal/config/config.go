@@ -44,6 +44,13 @@ const (
 	StrategyBuff     = 3 // 保持Buff（需要屏幕守卫）
 )
 
+// DefaultToggleKey 是启停键的默认值：鼠标侧键 1（X1）。
+//
+// 选它而不是键盘功能键，依据是三款暗黑游戏的默认键位：
+// 暗黑3 的 F1 是「收藏」、F2–F12 虽未绑定但位置偏远；Shift 在暗黑2/3/4 都是「强制站立」；
+// 而三款游戏的默认键位都不会占用鼠标额外按键。侧键在「仅按下时」的启动方式下也比键盘功能键省力。
+const DefaultToggleKey = "X1"
+
 // 触发模式：决定连点类技能是各自独立计时，还是按槽位顺序一轮一轮触发。
 // 两者是玩家能直接感知的行为差异（罗技/雷蛇式顺序宏 vs 独立计时），因此对用户可见。
 const (
@@ -242,14 +249,11 @@ func resolve(raw *Raw) (*Parsed, error) {
 
 	toggleName := raw.Toggle
 	if strings.TrimSpace(toggleName) == "" {
-		toggleName = "F1"
+		toggleName = DefaultToggleKey
 	}
 	toggleVK, err := keys.Parse(toggleName)
 	if err != nil {
 		return nil, fmt.Errorf("启停键无效：%v", err)
-	}
-	if keys.IsMouse(toggleVK) {
-		return nil, fmt.Errorf("启停键不支持鼠标键（%s）", keys.Label(toggleVK))
 	}
 
 	if len(raw.Profiles) < 1 || len(raw.Profiles) > maxProfiles {

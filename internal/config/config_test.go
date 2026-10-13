@@ -13,7 +13,7 @@ const docExample = `DLM1:eyJ2IjoxLCJnIjoiZDQiLCJuIjoi5YWJ55-b5rOV5biILemAn-WItyI
 const docExampleV2 = `DLM2:eyJ2IjoyLCJnIjoiZDMiLCJuIjoi5pqX6buRMyDpgJ_liLciLCJhIjoi5p-QQkTkvZzogIUiLCJ0ZyI6IkYxIiwicCI6W3sibiI6IumAn-WItyIsInIiOlt7InRnIjoidCIsImEiOiJ0YXA6MiIsImkiOjMwMCwic3QiOjN9LHsidGciOiJ0IiwiYSI6ImhvbGQ6Uk1CIn0seyJ0ZyI6InQiLCJhIjoidGFwOjEiLCJpIjoxNTAsInN0IjoyLCJkIjotNDAsInJkIjp0cnVlfV19XX0`
 
 // docExampleV3 是 docs/share-code.md 中的示例码（v3）：必须始终可解析。
-const docExampleV3 = `DLM3:eyJ2IjozLCJnIjoiZDMiLCJuIjoi5pqX6buRMyDpgJ_liLciLCJhIjoi5p-QQkTkvZzogIUiLCJ0ZyI6IkYxIiwicCI6W3sibiI6IumAn-WItyIsIm0iOiJzZXEiLCJyIjpbeyJ0ZyI6InQiLCJhIjoidGFwOjIiLCJpIjozMDAsInN0IjozfSx7InRnIjoidCIsImEiOiJob2xkOlJNQiJ9LHsidGciOiJ0IiwiYSI6InRhcDoxIiwiaSI6MTUwLCJzdCI6MiwiZCI6LTQwLCJyZCI6dHJ1ZX1dfV19`
+const docExampleV3 = `DLM3:eyJ2IjozLCJnIjoiZDMiLCJuIjoi5pqX6buRMyDpgJ_liLciLCJhIjoi5p-QQkTkvZzogIUiLCJ0ZyI6IlgxIiwicCI6W3sibiI6IumAn-WItyIsIm0iOiJzZXEiLCJyIjpbeyJ0ZyI6InQiLCJhIjoidGFwOjIiLCJpIjozMDAsInN0IjozfSx7InRnIjoidCIsImEiOiJob2xkOlJNQiJ9LHsidGciOiJ0IiwiYSI6InRhcDoxIiwiaSI6MTUwLCJzdCI6MiwiZCI6LTQwLCJyZCI6dHJ1ZX1dfV19`
 
 // legacyPrefix 是 v1 前缀（仅测试使用）。
 const legacyPrefix = "DLM1:"
@@ -134,6 +134,20 @@ func TestUpgradeLegacyIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestToggleKeyDefaultsToMouseSideButton(t *testing.T) {
+	// 缺省启停键为鼠标侧键 1：三款暗黑游戏的默认键位都不占用鼠标额外按键
+	// （暗黑3 的 F1 是「收藏」，Shift 三款都是「强制站立」）。
+	p := mustParse(t, codeFromJSON(`{"v":3,"p":[{"r":[{"tg":"t","a":"tap:1","i":100}]}]}`))
+	if p.ToggleVK != 0x05 {
+		t.Fatalf("缺省启停键应为 X1(0x05)，实际 0x%02X", p.ToggleVK)
+	}
+	// 显式使用鼠标键作为启停键应当被接受。
+	p2 := mustParse(t, codeFromJSON(`{"v":3,"tg":"X2","p":[{"r":[{"tg":"t","a":"tap:1","i":100}]}]}`))
+	if p2.ToggleVK != 0x06 {
+		t.Fatalf("鼠标键作为启停键应被接受，实际 0x%02X", p2.ToggleVK)
+	}
+}
+
 func TestParseRejectsInvalidMode(t *testing.T) {
 	valid := `{"tg":"t","a":"tap:1","i":100}`
 	code := codeFromJSON(`{"v":3,"p":[{"m":"round","r":[` + valid + `]}]}`)
@@ -144,7 +158,7 @@ func TestParseRejectsInvalidMode(t *testing.T) {
 
 func TestParseDocExampleV3(t *testing.T) {
 	p := mustParse(t, docExampleV3)
-	if p.Game != "d3" || p.ToggleVK != 0x70 {
+	if p.Game != "d3" || p.ToggleVK != 0x05 {
 		t.Fatalf("v3 示例基础字段解析错误：%+v", p)
 	}
 	if p.Profiles[0].Mode != ModeSequential {
@@ -227,7 +241,7 @@ func TestParseRejectsInvalid(t *testing.T) {
 		"序列过长":     codeFromJSON(`{"v":3,"p":[{"r":[{"tg":"t","a":"seq:1,2,3,4,5,6,7","i":100}]}]}`),
 		"触发方式非法":   codeFromJSON(`{"v":3,"p":[{"r":[{"tg":"x","a":"tap:1","i":100}]}]}`),
 		"触发键非法":    codeFromJSON(`{"v":3,"p":[{"r":[{"tg":"h:??","a":"tap:1","i":100}]}]}`),
-		"启停键用鼠标":   codeFromJSON(`{"v":3,"tg":"LMB","p":[{"r":[` + valid + `]}]}`),
+
 		"切换键用鼠标":   codeFromJSON(`{"v":3,"p":[{"r":[` + valid + `],"hk":"X1"}]}`),
 		"切换键非法":    codeFromJSON(`{"v":3,"p":[{"r":[` + valid + `],"hk":"??"}]}`),
 		"名称过长":     codeFromJSON(`{"v":3,"n":"` + strings.Repeat("长", 25) + `","p":[{"r":[` + valid + `]}]}`),
