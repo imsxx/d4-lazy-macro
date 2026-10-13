@@ -55,6 +55,13 @@ func (e *Env) SleepHalf() {
 	}
 }
 
+// SleepQuarter 等待四分之一个动作间隔（脚本里连续点击之间的节奏 delay//4）。
+func (e *Env) SleepQuarter() {
+	if e.Delay > 0 {
+		time.Sleep(e.Delay / 4)
+	}
+}
+
 // aborted 报告用户是否已请求中断（再按一次助手键即可打断）。
 func (e *Env) aborted() bool {
 	return e.Aborted != nil && e.Aborted()
