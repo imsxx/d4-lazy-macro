@@ -1116,11 +1116,14 @@ func (w *mainWindow) createHelperPanel() decl.Widget {
 	checks := make([]decl.Widget, 0, len(allHelpers))
 	for i, h := range allHelpers {
 		w.helperChecks[i] = helperEntry{id: h.ID()}
+		// 固定每列宽度：这样多个开关在纵向上对齐成一列，而不是各自挤在一起。
 		checks = append(checks, decl.CheckBox{
 			AssignTo:         &w.helperChecks[i].check,
 			Text:             h.Name(),
 			Checked:          hs.IsEnabled(h.ID()),
 			OnCheckedChanged: w.onHelperChanged,
+			MinSize:          decl.Size{Width: helperColWidth, Height: ctrlHeight},
+			MaxSize:          decl.Size{Width: helperColWidth, Height: ctrlHeight},
 		})
 	}
 
@@ -1154,8 +1157,8 @@ func (w *mainWindow) createHelperPanel() decl.Widget {
 						AssignTo:              &w.helperSpeed,
 						Model:                 helperSpeedNames,
 						CurrentIndex:          speedIdx,
-						MinSize:               decl.Size{Width: 110, Height: ctrlHeight},
-						MaxSize:               decl.Size{Width: 110, Height: ctrlHeight},
+						MinSize:               decl.Size{Width: 150, Height: ctrlHeight},
+						MaxSize:               decl.Size{Width: 150, Height: ctrlHeight},
 						OnCurrentIndexChanged: w.onHelperChanged,
 						ToolTipText:           "助手每一步之间的等待时间。游戏动画没播完就点下一下会丢操作，慢一点更稳",
 					},
@@ -1190,6 +1193,9 @@ func (w *mainWindow) createHelperPanel() decl.Widget {
 		},
 	}
 }
+
+// helperColWidth 是助手开关的列宽：固定值让各开关在纵向对齐成一列。
+const helperColWidth = 260
 
 // 动画速度档位（毫秒），下标与 helperSpeedNames 对应。
 var (
