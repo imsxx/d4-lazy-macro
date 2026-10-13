@@ -10,6 +10,7 @@ import (
 
 	"github.com/imsxx/diablo-lazy-macro/internal/config"
 	"github.com/imsxx/diablo-lazy-macro/internal/games"
+	"github.com/imsxx/diablo-lazy-macro/internal/keys"
 )
 
 const (
@@ -31,10 +32,20 @@ type Snapshot struct {
 	StartMode  int        `json:"start_mode,omitempty"` // 0: 懒人模式(开关切换), 1: 仅按下时(按住生效)
 }
 
+// GameKeys 是一款游戏的按键映射：对应玩家自己的游戏内按键设置，与分享码无关、只存本机。
+// 玩家的技能交互 / 强制站立 / 强制移动等键位因人而异，因此全部可自定义，这里只提供默认值。
+type GameKeys struct {
+	// ForceStandEnabled 是否在连点「需要强制站立」的技能时自动按住强制站立键（暗黑3 为左键技能）。
+	ForceStandEnabled bool `json:"force_stand_enabled,omitempty"`
+	// ForceStandKey 强制站立键的协议键名；留空表示使用该游戏适配器给出的默认值。
+	ForceStandKey string `json:"force_stand_key,omitempty"`
+}
+
 // Settings 是工具级设置（不随分享码分发）。
 type Settings struct {
-	CurrentGame string            `json:"current_game"`
-	Processes   map[string]string `json:"processes,omitempty"` // 各游戏目标进程名的本地覆盖
+	CurrentGame string              `json:"current_game"`
+	Processes   map[string]string   `json:"processes,omitempty"`  // 各游戏目标进程名的本地覆盖
+	GameKeys    map[string]GameKeys `json:"game_keys,omitempty"`  // 各游戏的按键映射（强制站立等）
 }
 
 // DefaultDir 返回默认数据目录（%APPDATA%\diablo-lazy-macro）。
@@ -66,7 +77,35 @@ func (s *Settings) Validate() error {
 			return fmt.Errorf("进程覆盖表包含未知游戏 %q", id)
 		}
 	}
+	for id, gk := range s.GameKeys {
+		if _, ok := games.Lookup(id); !ok {
+			return fmt.Errorf("按键映射表包含未知游戏 %q", id)
+		}
+		if gk.ForceStandKey == "" {
+			continue
+		}
+		if _, err := keys.Parse(gk.ForceStandKey); err != nil {
+			return fmt.Errorf("%s 的强制站立键无效：%v", id, err)
+		}
+	}
 	return nil
+}
+
+// GameKeyMap 返回某游戏的按键映射；无记录时返回零值。
+func (s *Settings) GameKeyMap(gameID string) GameKeys {
+	return s.GameKeys[gameID]
+}
+
+// SetGameKeyMap 写入某游戏的按键映射；空记录会被清理，避免存档里留下无意义的空对象。
+func (s *Settings) SetGameKeyMap(gameID string, gk GameKeys) {
+	if gk.ForceStandKey == "" && !gk.ForceStandEnabled {
+		delete(s.GameKeys, gameID)
+		return
+	}
+	if s.GameKeys == nil {
+		s.GameKeys = map[string]GameKeys{}
+	}
+	s.GameKeys[gameID] = gk
 }
 
 // TargetProcess 返回某游戏的目标进程名（含本地覆盖）。

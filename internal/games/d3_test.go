@@ -120,6 +120,33 @@ func TestOtherGamesHaveNoBuffGuard(t *testing.T) {
 	}
 }
 
+func TestForceStandCapabilities(t *testing.T) {
+	d3, ok := For("d3")
+	if !ok {
+		t.Fatal("暗黑3 适配器未注册")
+	}
+	if got := d3.DefaultForceStandKey(); got != "SHIFT" {
+		t.Errorf("暗黑3 的强制站立默认键应为 SHIFT，实际 %q", got)
+	}
+	keys := d3.ForceStandKeys()
+	if len(keys) != 1 || keys[0] != "LMB" {
+		t.Errorf("暗黑3 应对鼠标左键应用强制站立，实际 %v", keys)
+	}
+	// 其余游戏尚未实测，不擅自启用。
+	for _, id := range []string{"d4", "d2r"} {
+		a, ok := For(id)
+		if !ok {
+			t.Fatalf("适配器 %s 未注册", id)
+		}
+		if got := a.ForceStandKeys(); len(got) != 0 {
+			t.Errorf("%s 尚未启用强制站立，应为空，实际 %v", id, got)
+		}
+		if a.DefaultForceStandKey() == "" {
+			t.Errorf("%s 应给出强制站立的默认键", id)
+		}
+	}
+}
+
 func TestAdapterRegistryConsistency(t *testing.T) {
 	if len(All()) != 3 {
 		t.Fatalf("预期注册 3 款游戏，实际 %d", len(All()))

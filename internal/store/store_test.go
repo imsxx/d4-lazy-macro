@@ -23,6 +23,35 @@ func sampleSnapshot() Snapshot {
 	}
 }
 
+func TestGameKeysValidationAndCleanup(t *testing.T) {
+	s := DefaultSettings()
+	s.SetGameKeyMap("d3", GameKeys{ForceStandEnabled: true, ForceStandKey: "LSHIFT"})
+	if err := s.Validate(); err != nil {
+		t.Fatalf("合法按键映射应通过校验：%v", err)
+	}
+	if got := s.GameKeyMap("d3"); !got.ForceStandEnabled || got.ForceStandKey != "LSHIFT" {
+		t.Fatalf("按键映射回读错误：%+v", got)
+	}
+
+	s.SetGameKeyMap("d3", GameKeys{ForceStandKey: "??"})
+	if err := s.Validate(); err == nil {
+		t.Fatal("非法键名应当被拒绝")
+	}
+
+	s.SetGameKeyMap("d3", GameKeys{})
+	if _, ok := s.GameKeys["d3"]; ok {
+		t.Fatal("空记录应被清理，避免存档里留下无意义的空对象")
+	}
+}
+
+func TestGameKeysRejectsUnknownGame(t *testing.T) {
+	s := DefaultSettings()
+	s.SetGameKeyMap("d5", GameKeys{ForceStandEnabled: true})
+	if err := s.Validate(); err == nil {
+		t.Fatal("未知游戏的按键映射应当被拒绝")
+	}
+}
+
 func TestSaveLoadRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	in := sampleSnapshot()

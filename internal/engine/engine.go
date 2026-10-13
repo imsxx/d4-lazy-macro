@@ -54,6 +54,11 @@ type Engine struct {
 	seqCursor int
 	seqNext   time.Time
 
+	// 强制站立：点击 forceStandApply 键（暗黑3 为鼠标左键）之前，先按住 forceStandVK。
+	// 两者都为 0 表示未启用；玩家自己已按住该键时直接点击，不重复按下。
+	forceStandApply uint16
+	forceStandVK    uint16
+
 	// randIntn 是延迟随机使用的随机源；默认 math/rand.Intn，测试可替换为确定性实现。
 	randIntn func(n int) int
 }
@@ -115,6 +120,15 @@ func (e *Engine) SetBuffChecker(checker func(vk uint16) bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.buffChecker = checker
+}
+
+// SetForceStand 启用「点击指定技能键前先按住修饰键」（暗黑3：左键技能自动强制站立，避免角色走动）。
+// applyVK 是需要保护的技能键，modifierVK 是强制站立键；任一为 0 即关闭。
+func (e *Engine) SetForceStand(applyVK, modifierVK uint16) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.forceStandApply = applyVK
+	e.forceStandVK = modifierVK
 }
 
 // Toggle 切换总开关并返回新状态。
@@ -266,9 +280,7 @@ func (e *Engine) tickSequentialLocked(now time.Time, foreground bool) {
 		if e.buffGateLocked(st) {
 			continue
 		}
-		if err := e.sender.Tap(st.rule.Keys[0]); err != nil {
-			e.onError(err)
-		}
+		e.tapLocked(st.rule.Keys[0])
 		e.seqNext = now.Add(e.delayOffsetLocked(st.rule) + time.Duration(st.rule.IntervalMS)*time.Millisecond)
 		return
 	}
@@ -294,11 +306,30 @@ func (e *Engine) tickTapLocked(st *ruleState, now time.Time) {
 		st.nextFire = now.Add(buffResampleDelay)
 		return
 	}
-	if err := e.sender.Tap(st.rule.Keys[0]); err != nil {
-		e.onError(err)
-	}
+	e.tapLocked(st.rule.Keys[0])
 	st.nextFire = now.Add(time.Duration(st.rule.IntervalMS) * time.Millisecond)
 	st.fireAt = time.Time{}
+}
+
+// tapLocked 合成一次点击。若该键需要强制站立（暗黑3 左键技能）且启用中，
+// 则先按住强制站立键、点完立即释放；玩家自己已按住该键时直接点击、不重复按下。
+func (e *Engine) tapLocked(vk uint16) {
+	if e.forceStandVK != 0 && vk == e.forceStandApply && !e.state.Pressed(e.forceStandVK) {
+		if err := e.sender.KeyDown(e.forceStandVK); err != nil {
+			e.onError(err)
+			return
+		}
+		if err := e.sender.Tap(vk); err != nil {
+			e.onError(err)
+		}
+		if err := e.sender.KeyUp(e.forceStandVK); err != nil {
+			e.onError(err)
+		}
+		return
+	}
+	if err := e.sender.Tap(vk); err != nil {
+		e.onError(err)
+	}
 }
 
 // buffGateLocked 判断本次连点是否应因「该技能 Buff 仍在生效」而让路。
@@ -337,9 +368,7 @@ func (e *Engine) delayOffsetLocked(r config.ParsedRule) time.Duration {
 func (e *Engine) activateLocked(st *ruleState, now time.Time) {
 	switch st.rule.Kind {
 	case config.ActionOnce:
-		if err := e.sender.Tap(st.rule.Keys[0]); err != nil {
-			e.onError(err)
-		}
+		e.tapLocked(st.rule.Keys[0])
 	case config.ActionHold:
 		if err := e.sender.KeyDown(st.rule.Keys[0]); err != nil {
 			e.onError(err)
@@ -365,8 +394,6 @@ func (e *Engine) deactivateLocked(st *ruleState) {
 }
 
 func (e *Engine) fireLocked(st *ruleState, vk uint16, now time.Time) {
-	if err := e.sender.Tap(vk); err != nil {
-		e.onError(err)
-	}
+	e.tapLocked(vk)
 	st.nextFire = now.Add(time.Duration(st.rule.IntervalMS) * time.Millisecond)
 }

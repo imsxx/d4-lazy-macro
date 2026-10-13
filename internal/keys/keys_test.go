@@ -59,3 +59,30 @@ func TestLabelAndIsMouse(t *testing.T) {
 		t.Fatalf("IsMouse 判定错误")
 	}
 }
+
+func TestModifierKeys(t *testing.T) {
+	// 修饰键用于「强制站立」等游戏内按键映射；无前缀写法等价于左侧键。
+	cases := map[string]uint16{
+		"SHIFT": 0xA0, "LSHIFT": 0xA0, "RSHIFT": 0xA1,
+		"CTRL": 0xA2, "LCTRL": 0xA2, "RCTRL": 0xA3,
+		"ALT": 0xA4, "LALT": 0xA4, "RALT": 0xA5,
+	}
+	for in, want := range cases {
+		got, err := Parse(in)
+		if err != nil {
+			t.Fatalf("Parse(%q) 返回错误：%v", in, err)
+		}
+		if got != want {
+			t.Fatalf("Parse(%q) = 0x%02X，期望 0x%02X", in, got, want)
+		}
+	}
+	labels := map[uint16]string{0xA0: "LSHIFT", 0xA1: "RSHIFT", 0xA2: "LCTRL", 0xA3: "RCTRL", 0xA4: "LALT", 0xA5: "RALT"}
+	for vk, want := range labels {
+		if got := Label(vk); got != want {
+			t.Fatalf("Label(0x%02X) = %q，期望 %q", vk, got, want)
+		}
+	}
+	if IsMouse(0xA0) {
+		t.Fatal("修饰键不应被判定为鼠标键")
+	}
+}

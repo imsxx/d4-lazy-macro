@@ -7,23 +7,42 @@ import (
 	"strings"
 )
 
-// 鼠标键沿用 Windows 虚拟键码编号。
+// 鼠标键与左右修饰键沿用 Windows 虚拟键码编号。
 const (
 	VKLeftMouse   = 0x01
 	VKRightMouse  = 0x02
 	VKMiddleMouse = 0x04
 	VKXButton1    = 0x05 // 鼠标后退侧键
 	VKXButton2    = 0x06 // 鼠标前进侧键
+
+	VKLeftShift  = 0xA0
+	VKRightShift = 0xA1
+	VKLeftCtrl   = 0xA2
+	VKRightCtrl  = 0xA3
+	VKLeftAlt    = 0xA4
+	VKRightAlt   = 0xA5
 )
 
 var named = map[string]uint16{
-	"LMB":      VKLeftMouse,
-	"RMB":      VKRightMouse,
-	"MMB":      VKMiddleMouse,
-	"X1":       VKXButton1,
-	"X2":       VKXButton2,
-	"M4":       VKXButton1,
-	"M5":       VKXButton2,
+	"LMB": VKLeftMouse,
+	"RMB": VKRightMouse,
+	"MMB": VKMiddleMouse,
+	"X1":  VKXButton1,
+	"X2":  VKXButton2,
+	"M4":  VKXButton1,
+	"M5":  VKXButton2,
+
+	// 修饰键：无前缀写法等价于左侧键（三款暗黑游戏的「强制站立」默认都是左 Shift）。
+	"SHIFT":  VKLeftShift,
+	"LSHIFT": VKLeftShift,
+	"RSHIFT": VKRightShift,
+	"CTRL":   VKLeftCtrl,
+	"LCTRL":  VKLeftCtrl,
+	"RCTRL":  VKRightCtrl,
+	"ALT":    VKLeftAlt,
+	"LALT":   VKLeftAlt,
+	"RALT":   VKRightAlt,
+
 	"TAB":      0x09,
 	"ESC":      0x1B,
 	"SPACE":    0x20,
@@ -61,7 +80,7 @@ func Parse(token string) (uint16, error) {
 			return uint16(c), nil
 		}
 	}
-	return 0, fmt.Errorf("不支持的按键 %q（支持 0-9 / A-Z / LMB / RMB / MMB / X1 / X2 / F1-F12 / TAB / ESC / SPACE / 0xNN）", token)
+	return 0, fmt.Errorf("不支持的按键 %q（支持 0-9 / A-Z / F1-F12 / TAB / ESC / SPACE / SHIFT / CTRL / ALT 及其左右变体 / LMB / RMB / MMB / X1 / X2 / 0xNN）", token)
 }
 
 // Label 把虚拟键码转成可读名称。
@@ -77,6 +96,18 @@ func Label(vk uint16) string {
 		return "X1"
 	case VKXButton2:
 		return "X2"
+	case VKLeftShift:
+		return "LSHIFT"
+	case VKRightShift:
+		return "RSHIFT"
+	case VKLeftCtrl:
+		return "LCTRL"
+	case VKRightCtrl:
+		return "RCTRL"
+	case VKLeftAlt:
+		return "LALT"
+	case VKRightAlt:
+		return "RALT"
 	}
 	if vk >= 0x70 && vk <= 0x7B {
 		return fmt.Sprintf("F%d", vk-0x6F)

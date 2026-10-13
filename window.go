@@ -10,6 +10,7 @@ import (
 	"github.com/imsxx/diablo-lazy-macro/internal/config"
 	"github.com/imsxx/diablo-lazy-macro/internal/games"
 	"github.com/imsxx/diablo-lazy-macro/internal/keys"
+	"github.com/imsxx/diablo-lazy-macro/internal/store"
 
 	"github.com/lxn/walk"
 	decl "github.com/lxn/walk/declarative"
@@ -98,12 +99,14 @@ type mainWindow struct {
 	mw  *walk.MainWindow
 
 	// 右栏全局控制与状态
-	gameCombo      *walk.ComboBox
-	toggleKeyBtn   *walk.PushButton
-	startModeCombo *walk.ComboBox
-	statusLabel    *walk.Label
-	targetProcLbl  *walk.Label
-	activeProfLbl  *walk.Label
+	gameCombo        *walk.ComboBox
+	toggleKeyBtn     *walk.PushButton
+	startModeCombo   *walk.ComboBox
+	statusLabel      *walk.Label
+	targetProcLbl    *walk.Label
+	activeProfLbl    *walk.Label
+	forceStandCheck  *walk.CheckBox
+	forceStandKeyBtn *walk.PushButton
 
 	// 左栏原生 TabWidget (4套独立方案页)
 	tabWidget *walk.TabWidget
@@ -280,6 +283,34 @@ func (a *app) createMainWindow() error {
 									decl.Label{
 										AssignTo: &w.targetProcLbl,
 										Text:     "🎮 目标进程：Diablo IV.exe",
+									},
+									decl.Composite{
+										Layout: decl.HBox{MarginsZero: true, Spacing: 6},
+										Children: []decl.Widget{
+											decl.CheckBox{
+												AssignTo:         &w.forceStandCheck,
+												Text:             "左键自动站立",
+												OnCheckedChanged: w.onForceStandToggled,
+												ToolTipText:      "连点左键技能时自动按住强制站立键，避免角色走动（暗黑3 的左键既是移动又是主要技能）\n键位需与游戏内「按键绑定」保持一致，点右侧按钮可改",
+											},
+											decl.PushButton{
+												AssignTo:    &w.forceStandKeyBtn,
+												Text:        "LSHIFT",
+												MinSize:     decl.Size{Width: 78, Height: 24},
+												MaxSize:     decl.Size{Width: 78, Height: 24},
+												OnClicked:   func() { w.startCapture(-1, 102) },
+												OnKeyDown:   w.handleGlobalKeyDown,
+												ToolTipText: "强制站立键：点此按钮后按任意键录入；默认 LSHIFT（暗黑3 的默认绑定）",
+												ContextMenuItems: []decl.MenuItem{
+													decl.Action{Text: "⌨️ 恢复默认 (LShift)", OnTriggered: func() { w.setForceStandKey("") }},
+													decl.Separator{},
+													decl.Action{Text: "⌨️ 设为 LShift", OnTriggered: func() { w.setForceStandKey("LSHIFT") }},
+													decl.Action{Text: "⌨️ 设为 LCtrl", OnTriggered: func() { w.setForceStandKey("LCTRL") }},
+													decl.Action{Text: "⌨️ 设为 LAlt", OnTriggered: func() { w.setForceStandKey("LALT") }},
+												},
+											},
+											decl.HSpacer{},
+										},
 									},
 								},
 							},
@@ -560,6 +591,7 @@ func (w *mainWindow) loadFromState() {
 	for t := 0; t < maxProfiles; t++ {
 		w.setCombo(w.modeComs[t], modeNames, modeToIndex(w.profileModes[t]))
 	}
+	w.loadForceStand()
 
 	// 将内存数据刷新到每个 Tab 对应的控件中
 	for t := 0; t < maxProfiles; t++ {
@@ -937,6 +969,8 @@ func (w *mainWindow) cancelCapture() {
 			tk = config.DefaultToggleKey
 		}
 		w.setButtonText(btn, keyNameOfToken(tk))
+	case s == 102:
+		w.setButtonText(btn, keyNameOfToken(w.forceStandKeyName()))
 	case s == 101 && t >= 0 && t < maxProfiles:
 		hk := w.profileHKs[t]
 		if hk == "" {
@@ -955,6 +989,8 @@ func (w *mainWindow) targetButton(tabIdx, slotIdx int) *walk.PushButton {
 		return w.toggleKeyBtn
 	case slotIdx == 101 && tabIdx >= 0 && tabIdx < maxProfiles:
 		return w.switchKeyBtns[tabIdx]
+	case slotIdx == 102:
+		return w.forceStandKeyBtn
 	default:
 		return nil
 	}
@@ -992,7 +1028,70 @@ func (w *mainWindow) handleGlobalKeyDown(key walk.Key) {
 	case s == 101 && t >= 0 && t < maxProfiles:
 		w.profileHKs[t] = token
 		w.setButtonText(w.switchKeyBtns[t], keyNameOfToken(token))
+	case s == 102:
+		w.setForceStandKey(token)
 	}
+}
+
+// forceStandKeyName 返回当前游戏生效的强制站立键名：玩家设置优先，留空则用该游戏默认值。
+func (w *mainWindow) forceStandKeyName() string {
+	gk := w.app.settings.GameKeyMap(w.app.settings.CurrentGame)
+	if gk.ForceStandKey != "" {
+		return gk.ForceStandKey
+	}
+	if adapter, ok := games.For(w.app.settings.CurrentGame); ok {
+		return adapter.DefaultForceStandKey()
+	}
+	return ""
+}
+
+// loadForceStand 把按键映射设置刷到界面控件。
+func (w *mainWindow) loadForceStand() {
+	gk := w.app.settings.GameKeyMap(w.app.settings.CurrentGame)
+	w.setCheckedSilently(w.forceStandCheck, gk.ForceStandEnabled)
+	key := w.forceStandKeyName()
+	if key == "" {
+		key = "—"
+	}
+	w.setButtonText(w.forceStandKeyBtn, keyNameOfToken(key))
+}
+
+// setForceStandKey 写入强制站立键（空串表示恢复该游戏默认值），并立即生效。
+func (w *mainWindow) setForceStandKey(token string) {
+	w.cancelCapture()
+	gk := w.app.settings.GameKeyMap(w.app.settings.CurrentGame)
+	gk.ForceStandKey = token
+	w.applyForceStandSettings(gk)
+}
+
+func (w *mainWindow) onForceStandToggled() {
+	if w.loading || w.forceStandCheck == nil {
+		return
+	}
+	gk := w.app.settings.GameKeyMap(w.app.settings.CurrentGame)
+	gk.ForceStandEnabled = w.forceStandCheck.Checked()
+	w.applyForceStandSettings(gk)
+}
+
+// applyForceStandSettings 持久化按键映射并让设置立即生效（无需重启宏）。
+func (w *mainWindow) applyForceStandSettings(gk store.GameKeys) {
+	gameID := w.app.settings.CurrentGame
+	w.app.settings.SetGameKeyMap(gameID, gk)
+	if err := store.SaveSettings(w.app.dir, *w.app.settings); err != nil {
+		w.fatal(err)
+		return
+	}
+	w.loadForceStand()
+
+	// 设置变化立即作用到运行中的引擎，不必重新应用配置。
+	if snap := w.app.st.snapshot(); snap.Engine != nil {
+		w.app.setupForceStand(snap.Engine)
+	}
+	state := "关闭"
+	if gk.ForceStandEnabled {
+		state = "开启"
+	}
+	w.app.log.Printf("[设置] %s 左键自动站立：%s（键 %s）", gameDisplayName(gameID), state, w.forceStandKeyName())
 }
 
 func (w *mainWindow) setToggleKey(token string) {

@@ -343,3 +343,47 @@ func TestSequentialModeRespectsForeground(t *testing.T) {
 	e.Tick(base.Add(10*time.Millisecond), true)
 	expectEvents(t, sender, "tap:1")
 }
+
+func TestForceStandWrapsProtectedKey(t *testing.T) {
+	// 启用强制站立后，点击受保护的技能键（暗黑3 左键）会先按住强制站立键、点完立即释放。
+	e, sender, _, _ := newTestEngine(t, []config.ParsedRule{
+		{Kind: config.ActionTap, Keys: []uint16{0x01}, IntervalMS: 100}, // 0x01 = 鼠标左键
+	})
+	e.SetForceStand(0x01, 0xA0) // 左键 -> LShift
+	e.SetEnabled(true)
+	e.Tick(base, true)
+	expectEvents(t, sender, "down:LSHIFT", "tap:LMB", "up:LSHIFT")
+}
+
+func TestForceStandSkippedWhenPlayerAlreadyHolds(t *testing.T) {
+	// 玩家自己已按住强制站立键时，不重复按下、也不代他释放，直接点击。
+	e, sender, state, _ := newTestEngine(t, []config.ParsedRule{
+		{Kind: config.ActionTap, Keys: []uint16{0x01}, IntervalMS: 100},
+	})
+	e.SetForceStand(0x01, 0xA0)
+	state[0xA0] = true
+	e.SetEnabled(true)
+	e.Tick(base, true)
+	expectEvents(t, sender, "tap:LMB")
+}
+
+func TestForceStandOnlyAppliesToProtectedKey(t *testing.T) {
+	// 只对配置的技能键生效，其余按键照常点击。
+	e, sender, _, _ := newTestEngine(t, []config.ParsedRule{
+		{Kind: config.ActionTap, Keys: []uint16{0x31}, IntervalMS: 100},
+	})
+	e.SetForceStand(0x01, 0xA0)
+	e.SetEnabled(true)
+	e.Tick(base, true)
+	expectEvents(t, sender, "tap:1")
+}
+
+func TestForceStandDisabledDoesNothing(t *testing.T) {
+	// 未启用（默认）时不包裹任何按键。
+	e, sender, _, _ := newTestEngine(t, []config.ParsedRule{
+		{Kind: config.ActionTap, Keys: []uint16{0x01}, IntervalMS: 100},
+	})
+	e.SetEnabled(true)
+	e.Tick(base, true)
+	expectEvents(t, sender, "tap:LMB")
+}

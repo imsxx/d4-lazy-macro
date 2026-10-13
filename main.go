@@ -282,6 +282,7 @@ func (a *app) loadGame(gameID string) error {
 			return err
 		}
 		a.setupBuffChecker(eng)
+		a.setupForceStand(eng)
 		profIdx := snap.ProfileIdx
 		if profIdx < 0 || profIdx >= len(parsed.Profiles) {
 			profIdx = 0
@@ -301,6 +302,7 @@ func (a *app) loadGame(gameID string) error {
 		if err == nil {
 			if eng, err := engine.New(winSender{}, winKeyState{}, parsed, a.notifyEngineError); err == nil {
 				a.setupBuffChecker(eng)
+				a.setupForceStand(eng)
 				_ = eng.SetProfile(0)
 				eng.SetEnabled(true)
 				next.Engine = eng
@@ -617,6 +619,7 @@ func (a *app) applyConfig(raw *config.Raw, parsed *config.Parsed, profileIdx int
 		return err
 	}
 	a.setupBuffChecker(eng)
+	a.setupForceStand(eng)
 	if err := eng.SetProfile(profileIdx); err != nil {
 		return err
 	}
@@ -832,6 +835,43 @@ func (a *app) setupBuffChecker(eng *engine.Engine) {
 		// 由游戏适配器判定该槽位技能的 Buff 是否仍在生效（无守卫的游戏恒为 false）。
 		return adapter.BuffActive(uintptr(fg.Handle), slotIdx, win32.Screen{})
 	})
+}
+
+// setupForceStand 依据本机按键映射设置与游戏适配器，为引擎注入「点击前先按住强制站立键」。
+// 设置来自每游戏按键映射（不随分享码分发）：玩家可自定义键位，留空则用该游戏默认值。
+func (a *app) setupForceStand(eng *engine.Engine) {
+	if eng == nil {
+		return
+	}
+	gameID := a.settings.CurrentGame
+	gk := a.settings.GameKeyMap(gameID)
+	adapter, ok := games.For(gameID)
+	if !ok || !gk.ForceStandEnabled {
+		eng.SetForceStand(0, 0)
+		return
+	}
+	targets := adapter.ForceStandKeys()
+	if len(targets) == 0 {
+		// 该游戏尚未启用这一机制（未实测），保持关闭。
+		eng.SetForceStand(0, 0)
+		return
+	}
+	keyName := gk.ForceStandKey
+	if keyName == "" {
+		keyName = adapter.DefaultForceStandKey()
+	}
+	modVK, err := keys.Parse(keyName)
+	if err != nil || modVK == 0 {
+		a.log.Printf("[设置] 强制站立键 %q 无效，已跳过", keyName)
+		eng.SetForceStand(0, 0)
+		return
+	}
+	applyVK, err := keys.Parse(targets[0])
+	if err != nil || applyVK == 0 {
+		eng.SetForceStand(0, 0)
+		return
+	}
+	eng.SetForceStand(applyVK, modVK)
 }
 
 // setTargetProcess 更新某游戏的目标进程名（空字符串表示恢复默认），并同步运行期状态。

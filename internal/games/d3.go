@@ -31,6 +31,12 @@ func (d3Adapter) Name() string           { return "暗黑破坏神3" }
 func (d3Adapter) DefaultProcess() string { return "Diablo III64.exe" }
 func (d3Adapter) Slots() []SlotDef       { return standardSlots() }
 
+// DefaultForceStandKey 暗黑3 的「强制站立」默认绑定左 Shift。
+func (d3Adapter) DefaultForceStandKey() string { return standardForceStandKey }
+
+// ForceStandKeys 暗黑3 的鼠标左键既是移动又是主要技能：点它之前按住强制站立键可避免角色走动。
+func (d3Adapter) ForceStandKeys() []string { return []string{"LMB"} }
+
 // BuffActive 采样指定槽位发光环的绿色分量，判断该技能的 Buff 是否仍在生效。
 func (d3Adapter) BuffActive(hwnd uintptr, slotIdx int, px PixelSource) bool {
 	if px == nil {

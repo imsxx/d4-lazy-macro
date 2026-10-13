@@ -29,6 +29,12 @@ type Adapter interface {
 	DefaultProcess() string
 	// Slots 返回技能槽位的默认定义（界面默认值与方案预设使用）。
 	Slots() []SlotDef
+	// DefaultForceStandKey 返回该游戏「强制站立 / 原地站立」的默认按键（协议键名）；无此机制返回空串。
+	// 玩家可在工具内改成自己的游戏设置，这里只提供默认值。
+	DefaultForceStandKey() string
+	// ForceStandKeys 返回「点击前需先按住强制站立键」的技能按键（协议键名）。
+	// 返回空表示该游戏暂未启用这一机制（未实测的游戏不擅自猜测行为）。
+	ForceStandKeys() []string
 	// BuffActive 报告指定槽位的技能 Buff 是否仍在生效；true 表示「仍在生效、不应抢按」。
 	// 无屏幕守卫的游戏恒返回 false。slotIdx 为槽位序号（0 起）。
 	BuffActive(hwnd uintptr, slotIdx int, px PixelSource) bool
