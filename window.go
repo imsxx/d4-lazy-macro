@@ -20,8 +20,31 @@ const (
 	maxProfiles = 4
 	numSlots    = 6
 
-	fixedWinWidth  = 860
+	// 左栏需要容纳 8 列槽位参数，右栏固定 300，再加外边距与栏间距。
+	fixedWinWidth  = 920
 	fixedWinHeight = 540
+)
+
+// 槽位表列宽：集中定义，便于与 fixedWinWidth 联动调整。
+const (
+	colSlotName   = 62
+	colKey        = 68
+	colStrategy   = 88
+	colInterval   = 62
+	colDelay      = 56
+	colRandom     = 44
+	colRepeat     = 86
+	colPriority   = 46
+	colRowSpacing = 6
+)
+
+// 高级参数的界面取值范围：与协议校验保持一致，避免界面允许但保存时被拒。
+const (
+	maxDelayUI     = 30000
+	maxRepeatUI    = 20
+	minRepeatGapMS = 20
+	maxRepeatGapMS = 600000
+	maxPriorityUI  = 6
 )
 
 // 槽位释放策略取值，顺序与 strategyNames 一一对应；取值以协议常量 config.Strategy* 为准。
@@ -50,6 +73,13 @@ type skillSlotData struct {
 	Key        string
 	Strategy   int // 0:禁用, 1:按住不放, 2:连点, 3:保持Buff
 	IntervalMS int
+
+	// 高级调参，对应分享码协议 v2 的 d / rd / rp / ri / pr
+	DelayMS        int  // 延迟毫秒：正数延后、负数提前（仅连点）
+	RandomDelay    bool // 延迟随机（仅连点）
+	Repeat         int  // 一次触发的连点次数（仅连点，≥2 生效）
+	RepeatInterval int  // 重复之间的间隔毫秒（仅连点）
+	Priority       int  // 保持Buff 优先级：越大越优先
 }
 
 // defaultSlots 按游戏适配器给出的槽位定义构造初始槽位（默认策略为禁用、间隔 250ms）。
@@ -84,9 +114,14 @@ type mainWindow struct {
 	tabWidget *walk.TabWidget
 
 	// 4个配置 × 6个核心技能槽位的行控件
-	slotKeyBtns       [maxProfiles][numSlots]*walk.PushButton
-	slotStrategyComs  [maxProfiles][numSlots]*walk.ComboBox
-	slotIntervalEdits [maxProfiles][numSlots]*walk.LineEdit
+	slotKeyBtns        [maxProfiles][numSlots]*walk.PushButton
+	slotStrategyComs   [maxProfiles][numSlots]*walk.ComboBox
+	slotIntervalEdits  [maxProfiles][numSlots]*walk.LineEdit
+	slotDelayEdits     [maxProfiles][numSlots]*walk.LineEdit
+	slotRandomChecks   [maxProfiles][numSlots]*walk.CheckBox
+	slotRepeatEdits    [maxProfiles][numSlots]*walk.LineEdit
+	slotRepeatGapEdits [maxProfiles][numSlots]*walk.LineEdit
+	slotPriorityEdits  [maxProfiles][numSlots]*walk.LineEdit
 
 	// 4个配置对应的设置项
 	profileNameEdits [maxProfiles]*walk.LineEdit
@@ -139,7 +174,8 @@ func (a *app) createMainWindow() error {
 		MinSize:         decl.Size{Width: fixedWinWidth, Height: fixedWinHeight},
 		MaxSize:         decl.Size{Width: fixedWinWidth, Height: fixedWinHeight},
 		Visible:         false,
-		DoubleBuffering: true,
+		// 不启用 DoubleBuffering：walk 的实现是给窗口加 WS_EX_COMPOSITED 扩展样式，
+		// 对以原生控件为主的窗口会造成整窗重绘跳变（打开与切换时肉眼可见的闪动）。
 		Layout:          decl.VBox{Margins: decl.Margins{Left: 10, Top: 8, Right: 10, Bottom: 6}, Spacing: 6},
 		OnKeyDown:       w.handleGlobalKeyDown,
 		Children: []decl.Widget{
@@ -149,8 +185,8 @@ func (a *app) createMainWindow() error {
 				Children: []decl.Widget{
 					// ================= 左栏：方案技能与按键设置 =================
 					decl.Composite{
-						MinSize: decl.Size{Width: 525},
-						MaxSize: decl.Size{Width: 525},
+						MinSize: decl.Size{Width: 585},
+						MaxSize: decl.Size{Width: 585},
 						Layout:  decl.VBox{MarginsZero: true, Spacing: 4},
 						Children: []decl.Widget{
 							decl.TabWidget{
@@ -213,6 +249,7 @@ func (a *app) createMainWindow() error {
 											decl.Label{Text: "宏启动方式：", MinSize: decl.Size{Width: 80}},
 											decl.ComboBox{
 												AssignTo:              &w.startModeCombo,
+												Model:                 startModeNames,
 												MinSize:               decl.Size{Width: 160},
 												MaxSize:               decl.Size{Width: 160},
 												OnCurrentIndexChanged: w.onStartModeChanged,
@@ -308,7 +345,7 @@ func (a *app) createMainWindow() error {
 	style &^= (win.WS_MAXIMIZEBOX | win.WS_THICKFRAME)
 	win.SetWindowLong(hwnd, win.GWL_STYLE, style)
 	win.SetWindowPos(hwnd, 0, int32(posX), int32(posY), int32(fixedWinWidth), int32(fixedWinHeight),
-		win.SWP_NOZORDER|win.SWP_FRAMECHANGED)
+		win.SWP_NOZORDER|win.SWP_FRAMECHANGED|win.SWP_NOREDRAW)
 
 	w.mw.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
 		*canceled = true
@@ -335,8 +372,10 @@ func (a *app) createMainWindow() error {
 func (w *mainWindow) createTabPage(tabIdx int) decl.TabPage {
 	t := tabIdx
 	return decl.TabPage{
-		Title:  fmt.Sprintf("配置 %d", t+1),
-		Layout: decl.VBox{Margins: decl.Margins{Left: 6, Top: 6, Right: 6, Bottom: 6}, Spacing: 4},
+		Title: fmt.Sprintf("配置 %d", t+1),
+		// 局部双缓冲：只把该页内部的控件合成后呈现，避免切换标签时逐个控件重绘造成的闪动。
+		DoubleBuffering: true,
+		Layout:          decl.VBox{Margins: decl.Margins{Left: 6, Top: 6, Right: 6, Bottom: 6}, Spacing: 4},
 		Children: []decl.Widget{
 			// 按键宏设置 GroupBox (高密度紧凑网格，去除冗长文字，采用 ToolTip)
 			decl.GroupBox{
@@ -344,13 +383,16 @@ func (w *mainWindow) createTabPage(tabIdx int) decl.TabPage {
 				Layout: decl.VBox{Margins: decl.Margins{Left: 8, Top: 6, Right: 8, Bottom: 6}, Spacing: 4},
 				Children: []decl.Widget{
 					decl.Composite{
-						Layout: decl.HBox{Spacing: 8},
+						Layout: decl.HBox{Spacing: colRowSpacing},
 						Children: []decl.Widget{
-							decl.Label{Text: "技能槽位", MinSize: decl.Size{Width: 65}, MaxSize: decl.Size{Width: 65}, Font: decl.Font{Bold: true}},
-							decl.Label{Text: "快捷键", MinSize: decl.Size{Width: 80}, MaxSize: decl.Size{Width: 80}, Font: decl.Font{Bold: true}},
-							decl.Label{Text: "释放策略", MinSize: decl.Size{Width: 105}, MaxSize: decl.Size{Width: 105}, Font: decl.Font{Bold: true}},
-							decl.Label{Text: "执行间隔", MinSize: decl.Size{Width: 80}, MaxSize: decl.Size{Width: 80}, Font: decl.Font{Bold: true}},
-							decl.Label{Text: "单位", MinSize: decl.Size{Width: 35}, MaxSize: decl.Size{Width: 35}, Font: decl.Font{Bold: true}},
+							decl.Label{Text: "技能槽位", MinSize: decl.Size{Width: colSlotName}, MaxSize: decl.Size{Width: colSlotName}, Font: decl.Font{Bold: true}},
+							decl.Label{Text: "快捷键", MinSize: decl.Size{Width: colKey}, MaxSize: decl.Size{Width: colKey}, Font: decl.Font{Bold: true}},
+							decl.Label{Text: "释放策略", MinSize: decl.Size{Width: colStrategy}, MaxSize: decl.Size{Width: colStrategy}, Font: decl.Font{Bold: true}},
+							decl.Label{Text: "间隔(ms)", MinSize: decl.Size{Width: colInterval}, MaxSize: decl.Size{Width: colInterval}, Font: decl.Font{Bold: true}, ToolTipText: "执行间隔（毫秒）"},
+							decl.Label{Text: "延迟", MinSize: decl.Size{Width: colDelay}, MaxSize: decl.Size{Width: colDelay}, Font: decl.Font{Bold: true}, ToolTipText: "延迟（毫秒）：正数延后、负数提前，|值| ≤ 20 视为关闭；仅连点可用"},
+							decl.Label{Text: "±随机", MinSize: decl.Size{Width: colRandom}, MaxSize: decl.Size{Width: colRandom}, Font: decl.Font{Bold: true}, ToolTipText: "勾选后每次延迟取 0～|延迟| 之间的随机值；仅连点可用"},
+							decl.Label{Text: "重复次数", MinSize: decl.Size{Width: colRepeat}, MaxSize: decl.Size{Width: colRepeat}, Font: decl.Font{Bold: true}, ToolTipText: "一次触发内连点 N 次，右侧为重复之间的间隔毫秒；仅连点可用"},
+							decl.Label{Text: "优先", MinSize: decl.Size{Width: colPriority}, MaxSize: decl.Size{Width: colPriority}, Font: decl.Font{Bold: true}, ToolTipText: "保持Buff 的优先级：数值越大越优先；高优先级的 Buff 生效时低优先级让路"},
 							decl.HSpacer{},
 						},
 					},
@@ -397,16 +439,16 @@ func (w *mainWindow) createTabPage(tabIdx int) decl.TabPage {
 
 func (w *mainWindow) createSlotRow(t, s int, labelText string) decl.Widget {
 	return decl.Composite{
-		Layout: decl.HBox{Spacing: 8},
+		Layout: decl.HBox{Spacing: colRowSpacing},
 		Children: []decl.Widget{
-			decl.Label{Text: labelText, MinSize: decl.Size{Width: 65}, MaxSize: decl.Size{Width: 65}},
+			decl.Label{Text: labelText, MinSize: decl.Size{Width: colSlotName}, MaxSize: decl.Size{Width: colSlotName}},
 			decl.PushButton{
-				AssignTo:  &w.slotKeyBtns[t][s],
-				Text:      "1",
-				MinSize:   decl.Size{Width: 80, Height: 24},
-				MaxSize:   decl.Size{Width: 80, Height: 24},
-				OnClicked: func() { w.startCapture(t, s) },
-				OnKeyDown: w.handleGlobalKeyDown,
+				AssignTo:    &w.slotKeyBtns[t][s],
+				Text:        "1",
+				MinSize:     decl.Size{Width: colKey, Height: 24},
+				MaxSize:     decl.Size{Width: colKey, Height: 24},
+				OnClicked:   func() { w.startCapture(t, s) },
+				OnKeyDown:   w.handleGlobalKeyDown,
 				ToolTipText: "左键点击后按键盘任意键录入；右键弹出菜单快速选择鼠标侧键/按键",
 				ContextMenuItems: []decl.MenuItem{
 					decl.Action{Text: "🖱️ 设为 鼠标左键 (LMB)", OnTriggered: func() { w.setSlotKey(t, s, "LMB") }},
@@ -420,22 +462,61 @@ func (w *mainWindow) createSlotRow(t, s int, labelText string) decl.Widget {
 			},
 			decl.ComboBox{
 				AssignTo:              &w.slotStrategyComs[t][s],
-				MinSize:               decl.Size{Width: 105},
-				MaxSize:               decl.Size{Width: 105},
+				Model:                 strategyNames,
+				MinSize:               decl.Size{Width: colStrategy},
+				MaxSize:               decl.Size{Width: colStrategy},
 				OnCurrentIndexChanged: func() { w.onSlotStrategyChanged(t, s) },
-				ToolTipText: "策略说明：\n· 禁用：不自动触发\n· 按住不放：旋风斩/扫射引导技能，战斗中持续按下\n· 连点：按指定间隔持续点击\n· 保持Buff：智能检测发光环(D3)或定时补放，未断绝不抢按",
+				ToolTipText:           "策略说明：\n· 禁用：不自动触发\n· 按住不放：旋风斩/扫射引导技能，战斗中持续按下\n· 连点：按指定间隔持续点击\n· 保持Buff：智能检测发光环(D3)或定时补放，未断绝不抢按",
 			},
 			decl.LineEdit{
 				AssignTo:      &w.slotIntervalEdits[t][s],
-				MinSize:       decl.Size{Width: 80},
-				MaxSize:       decl.Size{Width: 80},
+				MinSize:       decl.Size{Width: colInterval},
+				MaxSize:       decl.Size{Width: colInterval},
 				OnTextChanged: func() { w.onSlotIntervalChanged(t, s) },
 				ToolTipText:   "执行间隔（毫秒）：\n· 连点模式：技能连发的间隔\n· 保持Buff模式：屏幕找色采样的频率或定时续航周期",
 			},
-			decl.Label{
-				Text:    "毫秒",
-				MinSize: decl.Size{Width: 35},
-				MaxSize: decl.Size{Width: 35},
+			decl.LineEdit{
+				AssignTo:      &w.slotDelayEdits[t][s],
+				MinSize:       decl.Size{Width: colDelay},
+				MaxSize:       decl.Size{Width: colDelay},
+				OnTextChanged: func() { w.onSlotTuningChanged(t, s) },
+				ToolTipText:   "延迟（毫秒）：\n· 正数：本周期内延后该毫秒数再发送\n· 负数：推迟到周期末尾前该毫秒数发送\n· 绝对值 ≤ 20 或留空视为关闭",
+			},
+			decl.CheckBox{
+				AssignTo:         &w.slotRandomChecks[t][s],
+				MinSize:          decl.Size{Width: colRandom},
+				MaxSize:          decl.Size{Width: colRandom},
+				OnCheckedChanged: func() { w.onSlotTuningChanged(t, s) },
+				ToolTipText:      "延迟随机：每次延迟取 0～|延迟| 之间的随机值",
+			},
+			decl.Composite{
+				Layout:  decl.HBox{MarginsZero: true, Spacing: 2},
+				MinSize: decl.Size{Width: colRepeat},
+				MaxSize: decl.Size{Width: colRepeat},
+				Children: []decl.Widget{
+					decl.LineEdit{
+						AssignTo:      &w.slotRepeatEdits[t][s],
+						MinSize:       decl.Size{Width: 34},
+						MaxSize:       decl.Size{Width: 34},
+						OnTextChanged: func() { w.onSlotTuningChanged(t, s) },
+						ToolTipText:   "重复次数（2–20）：一次触发内连点 N 次；留空或 1 表示不重复",
+					},
+					decl.Label{Text: "×", MinSize: decl.Size{Width: 10}, MaxSize: decl.Size{Width: 10}},
+					decl.LineEdit{
+						AssignTo:      &w.slotRepeatGapEdits[t][s],
+						MinSize:       decl.Size{Width: 38},
+						MaxSize:       decl.Size{Width: 38},
+						OnTextChanged: func() { w.onSlotTuningChanged(t, s) },
+						ToolTipText:   "重复之间的间隔（毫秒，20–600000）",
+					},
+				},
+			},
+			decl.LineEdit{
+				AssignTo:      &w.slotPriorityEdits[t][s],
+				MinSize:       decl.Size{Width: colPriority},
+				MaxSize:       decl.Size{Width: colPriority},
+				OnTextChanged: func() { w.onSlotTuningChanged(t, s) },
+				ToolTipText:   "保持Buff 优先级（0–6）：数值越大越优先；高优先级 Buff 生效时低优先级让路",
 			},
 			decl.HSpacer{},
 		},
@@ -504,12 +585,6 @@ func (w *mainWindow) loadFromState() {
 	w.setCombo(w.gameCombo, gameNames(), gameIndex(w.app.settings.CurrentGame))
 	w.setCombo(w.startModeCombo, startModeNames, w.startMode)
 
-	for t := 0; t < maxProfiles; t++ {
-		for s := 0; s < numSlots; s++ {
-			w.setCombo(w.slotStrategyComs[t][s], strategyNames, 0)
-		}
-	}
-
 	// 将内存数据刷新到每个 Tab 对应的控件中
 	for t := 0; t < maxProfiles; t++ {
 		w.setText(w.profileNameEdits[t], w.profileNames[t])
@@ -526,20 +601,7 @@ func (w *mainWindow) loadFromState() {
 			slot := w.profileSlots[t][s]
 			w.setButtonText(w.slotKeyBtns[t][s], keyNameOfToken(slot.Key))
 			_ = w.slotStrategyComs[t][s].SetCurrentIndex(slot.Strategy)
-			switch slot.Strategy {
-			case 0, 1: // 禁用, 按住不放
-				w.setText(w.slotIntervalEdits[t][s], "—")
-				w.slotIntervalEdits[t][s].SetEnabled(false)
-			case 2: // 连点
-				w.setText(w.slotIntervalEdits[t][s], strconv.Itoa(slot.IntervalMS))
-				w.slotIntervalEdits[t][s].SetEnabled(true)
-			case 3: // 保持Buff
-				if slot.IntervalMS <= 0 {
-					slot.IntervalMS = 300
-				}
-				w.setText(w.slotIntervalEdits[t][s], strconv.Itoa(slot.IntervalMS))
-				w.slotIntervalEdits[t][s].SetEnabled(true)
-			}
+			w.loadSlotTuning(t, s, slot)
 		}
 	}
 
@@ -638,15 +700,7 @@ func (w *mainWindow) flushAllTabs() {
 			}
 		}
 		for s := 0; s < numSlots; s++ {
-			slot := &w.profileSlots[t][s]
-			if w.slotStrategyComs[t][s] != nil {
-				slot.Strategy = w.slotStrategyComs[t][s].CurrentIndex()
-			}
-			if w.slotIntervalEdits[t][s] != nil && (slot.Strategy == strategySpam || slot.Strategy == strategyBuff) {
-				if n, err := strconv.Atoi(strings.TrimSpace(w.slotIntervalEdits[t][s].Text())); err == nil && n > 0 {
-					slot.IntervalMS = n
-				}
-			}
+			w.flushSlot(t, s)
 		}
 	}
 	if w.startModeCombo != nil {
@@ -661,23 +715,212 @@ func (w *mainWindow) onSlotStrategyChanged(t, s int) {
 	slot := &w.profileSlots[t][s]
 	slot.Strategy = w.slotStrategyComs[t][s].CurrentIndex()
 
+	// 切换策略后清理与当前策略无关的参数，避免把无意义字段写进分享码。
 	switch slot.Strategy {
-	case 0, 1: // 禁用, 按住不放
-		w.setText(w.slotIntervalEdits[t][s], "—")
-		w.slotIntervalEdits[t][s].SetEnabled(false)
-	case 2: // 连点
-		w.slotIntervalEdits[t][s].SetEnabled(true)
+	case strategySpam:
+		slot.Priority = 0
 		if slot.IntervalMS <= 0 {
 			slot.IntervalMS = 250
 		}
+	case strategyBuff:
+		slot.DelayMS = 0
+		slot.RandomDelay = false
+		slot.Repeat = 0
+		slot.RepeatInterval = 0
+		if slot.IntervalMS <= 0 {
+			slot.IntervalMS = 300
+		}
+	default: // 禁用 / 按住不放
+		slot.DelayMS = 0
+		slot.RandomDelay = false
+		slot.Repeat = 0
+		slot.RepeatInterval = 0
+		slot.Priority = 0
+	}
+	w.loadSlotTuning(t, s, *slot)
+}
+
+// loadSlotTuning 把单个槽位的策略与高级参数刷到对应控件，并按策略决定各列可用性。
+func (w *mainWindow) loadSlotTuning(t, s int, slot skillSlotData) {
+	switch slot.Strategy {
+	case strategySpam:
 		w.setText(w.slotIntervalEdits[t][s], strconv.Itoa(slot.IntervalMS))
-	case 3: // 保持Buff
-		w.slotIntervalEdits[t][s].SetEnabled(true)
+	case strategyBuff:
 		if slot.IntervalMS <= 0 {
 			slot.IntervalMS = 300
 		}
 		w.setText(w.slotIntervalEdits[t][s], strconv.Itoa(slot.IntervalMS))
+	default:
+		w.setText(w.slotIntervalEdits[t][s], "—")
 	}
+
+	if slot.DelayMS != 0 {
+		w.setText(w.slotDelayEdits[t][s], strconv.Itoa(slot.DelayMS))
+	} else {
+		w.setText(w.slotDelayEdits[t][s], "")
+	}
+	w.setCheckedSilently(w.slotRandomChecks[t][s], slot.RandomDelay)
+
+	if slot.Repeat >= 2 {
+		w.setText(w.slotRepeatEdits[t][s], strconv.Itoa(slot.Repeat))
+		w.setText(w.slotRepeatGapEdits[t][s], strconv.Itoa(slot.RepeatInterval))
+	} else {
+		w.setText(w.slotRepeatEdits[t][s], "")
+		w.setText(w.slotRepeatGapEdits[t][s], "")
+	}
+	if slot.Priority > 0 {
+		w.setText(w.slotPriorityEdits[t][s], strconv.Itoa(slot.Priority))
+	} else {
+		w.setText(w.slotPriorityEdits[t][s], "")
+	}
+	w.applySlotTuningEnabled(t, s, slot.Strategy)
+}
+
+// applySlotTuningEnabled 按策略决定各列是否可编辑：
+// 连点 → 间隔/延迟/随机/重复；保持Buff → 间隔/优先级；其余策略全部禁用。
+func (w *mainWindow) applySlotTuningEnabled(t, s, strategy int) {
+	spam := strategy == strategySpam
+	buff := strategy == strategyBuff
+	if c := w.slotIntervalEdits[t][s]; c != nil {
+		c.SetEnabled(spam || buff)
+	}
+	if c := w.slotDelayEdits[t][s]; c != nil {
+		c.SetEnabled(spam)
+	}
+	if c := w.slotRandomChecks[t][s]; c != nil {
+		c.SetEnabled(spam)
+	}
+	if c := w.slotRepeatEdits[t][s]; c != nil {
+		c.SetEnabled(spam)
+	}
+	if c := w.slotRepeatGapEdits[t][s]; c != nil {
+		c.SetEnabled(spam)
+	}
+	if c := w.slotPriorityEdits[t][s]; c != nil {
+		c.SetEnabled(buff)
+	}
+}
+
+// onSlotTuningChanged 处理延迟/随机/重复/优先级任一控件的变化，回写内存状态。
+// 不回写控件，避免打断用户输入；显示规范化由 loadSlotTuning 负责。
+func (w *mainWindow) onSlotTuningChanged(t, s int) {
+	if w.loading {
+		return
+	}
+	slot := &w.profileSlots[t][s]
+	switch slot.Strategy {
+	case strategySpam:
+		slot.DelayMS = parseIntField(w.slotDelayEdits[t][s], -maxDelayUI, maxDelayUI, 0)
+		if c := w.slotRandomChecks[t][s]; c != nil {
+			if slot.DelayMS == 0 {
+				slot.RandomDelay = false
+				w.setCheckedSilently(c, false) // 没有延迟时，随机无意义
+			} else {
+				slot.RandomDelay = c.Checked()
+			}
+		}
+		slot.Repeat = parseRepeatCount(w.slotRepeatEdits[t][s])
+		if slot.Repeat >= 2 {
+			slot.RepeatInterval = parseIntField(w.slotRepeatGapEdits[t][s], minRepeatGapMS, maxRepeatGapMS, minRepeatGapMS)
+		} else {
+			slot.RepeatInterval = 0
+		}
+	case strategyBuff:
+		slot.Priority = parseIntField(w.slotPriorityEdits[t][s], 0, maxPriorityUI, 0)
+	}
+}
+
+// flushSlot 把单个槽位行上的控件取值写回内存状态（保存前调用）。
+func (w *mainWindow) flushSlot(t, s int) {
+	slot := &w.profileSlots[t][s]
+	if c := w.slotStrategyComs[t][s]; c != nil {
+		slot.Strategy = c.CurrentIndex()
+	}
+	if (slot.Strategy == strategySpam || slot.Strategy == strategyBuff) && w.slotIntervalEdits[t][s] != nil {
+		if n, err := strconv.Atoi(strings.TrimSpace(w.slotIntervalEdits[t][s].Text())); err == nil && n > 0 {
+			slot.IntervalMS = n
+		}
+	}
+
+	switch slot.Strategy {
+	case strategySpam:
+		slot.DelayMS = parseIntField(w.slotDelayEdits[t][s], -maxDelayUI, maxDelayUI, 0)
+		slot.RandomDelay = false
+		if c := w.slotRandomChecks[t][s]; c != nil && slot.DelayMS != 0 {
+			slot.RandomDelay = c.Checked()
+		}
+		slot.Repeat = parseRepeatCount(w.slotRepeatEdits[t][s])
+		if slot.Repeat >= 2 {
+			slot.RepeatInterval = parseIntField(w.slotRepeatGapEdits[t][s], minRepeatGapMS, maxRepeatGapMS, minRepeatGapMS)
+		} else {
+			slot.RepeatInterval = 0
+		}
+		slot.Priority = 0
+	case strategyBuff:
+		slot.Priority = parseIntField(w.slotPriorityEdits[t][s], 0, maxPriorityUI, 0)
+		slot.DelayMS = 0
+		slot.RandomDelay = false
+		slot.Repeat = 0
+		slot.RepeatInterval = 0
+	default:
+		slot.DelayMS = 0
+		slot.RandomDelay = false
+		slot.Repeat = 0
+		slot.RepeatInterval = 0
+		slot.Priority = 0
+	}
+}
+
+// setCheckedSilently 修改勾选状态但不触发回写回调。
+func (w *mainWindow) setCheckedSilently(cb *walk.CheckBox, on bool) {
+	if cb == nil || cb.Checked() == on {
+		return
+	}
+	prev := w.loading
+	w.loading = true
+	cb.SetChecked(on)
+	w.loading = prev
+}
+
+// parseIntField 读取输入框整数：留空或非法返回 fallback，越界收敛到边界。
+func parseIntField(le *walk.LineEdit, min, max, fallback int) int {
+	if le == nil {
+		return fallback
+	}
+	text := strings.TrimSpace(le.Text())
+	if text == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(text)
+	if err != nil {
+		return fallback
+	}
+	if n < min {
+		return min
+	}
+	if n > max {
+		return max
+	}
+	return n
+}
+
+// parseRepeatCount 解析重复次数：留空、0、1 均表示不重复。
+func parseRepeatCount(le *walk.LineEdit) int {
+	if le == nil {
+		return 0
+	}
+	text := strings.TrimSpace(le.Text())
+	if text == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(text)
+	if err != nil || n < 2 {
+		return 0
+	}
+	if n > maxRepeatUI {
+		return maxRepeatUI
+	}
+	return n
 }
 
 func (w *mainWindow) onSlotIntervalChanged(t, s int) {
@@ -946,38 +1189,59 @@ func (w *mainWindow) fatal(err error) {
 	}
 }
 
+// 以下 set* 辅助均为幂等：值未变化时跳过写入，避免触发无谓的控件重绘（界面闪动的直接来源之一）。
+
 func (w *mainWindow) setText(le *walk.LineEdit, s string) {
-	if le == nil {
+	if le == nil || le.Text() == s {
 		return
 	}
 	_ = le.SetText(s)
 }
 
 func (w *mainWindow) setLabel(l *walk.Label, s string) {
-	if l == nil {
+	if l == nil || l.Text() == s {
 		return
 	}
 	_ = l.SetText(s)
 }
 
 func (w *mainWindow) setButtonText(b *walk.PushButton, s string) {
-	if b == nil {
+	if b == nil || b.Text() == s {
 		return
 	}
 	_ = b.SetText(s)
 }
 
+// setCombo 幂等设置下拉的模型与选中项：模型内容一致时不重建，避免整片下拉重绘。
 func (w *mainWindow) setCombo(cb *walk.ComboBox, items []string, idx int) {
 	if cb == nil {
 		return
 	}
-	_ = cb.SetModel(items)
+	if !comboModelEqual(cb, items) {
+		if err := cb.SetModel(items); err != nil {
+			return
+		}
+	}
 	if idx < 0 || idx >= len(items) {
 		idx = 0
 	}
-	if len(items) > 0 {
+	if len(items) > 0 && cb.CurrentIndex() != idx {
 		_ = cb.SetCurrentIndex(idx)
 	}
+}
+
+// comboModelEqual 判断下拉当前模型是否与目标列表逐项一致。
+func comboModelEqual(cb *walk.ComboBox, items []string) bool {
+	cur, ok := cb.Model().([]string)
+	if !ok || len(cur) != len(items) {
+		return false
+	}
+	for i := range items {
+		if cur[i] != items[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func profileToSlots(prof config.RawProfile) [numSlots]skillSlotData {
@@ -1014,6 +1278,13 @@ func profileToSlots(prof config.RawProfile) [numSlots]skillSlotData {
 		if r.IntervalMS > 0 {
 			slots[slotIdx].IntervalMS = r.IntervalMS
 		}
+		slots[slotIdx].DelayMS = r.DelayMS
+		slots[slotIdx].RandomDelay = r.RandomDelay
+		slots[slotIdx].Repeat = r.Repeat
+		if r.RepeatInterval > 0 {
+			slots[slotIdx].RepeatInterval = r.RepeatInterval
+		}
+		slots[slotIdx].Priority = r.Priority
 
 		// 优先采用配置里显式声明的策略；v1 旧码没有该字段，按动作类型与间隔推断。
 		switch {
@@ -1064,20 +1335,33 @@ func slotsToProfile(slots [numSlots]skillSlotData, name string, switchKey string
 				Action:   "hold:" + s.Key,
 				Strategy: config.StrategyHold,
 			})
-		case strategySpam: // 连点
-			rules = append(rules, config.RawRule{
+		case strategySpam: // 连点：可叠加延迟（含随机）与重复连发
+			rule := config.RawRule{
 				Trigger:    "t",
 				Action:     "tap:" + s.Key,
 				IntervalMS: clampInterval(s.IntervalMS, 20),
 				Strategy:   config.StrategySpam,
-			})
+			}
+			if s.DelayMS != 0 {
+				rule.DelayMS = s.DelayMS
+				rule.RandomDelay = s.RandomDelay
+			}
+			if s.Repeat >= 2 {
+				rule.Repeat = s.Repeat
+				rule.RepeatInterval = clampInterval(s.RepeatInterval, minRepeatGapMS)
+			}
+			rules = append(rules, rule)
 		case strategyBuff: // 保持Buff：暗黑3 由屏幕守卫按需补放，其他游戏退化为定时续航
-			rules = append(rules, config.RawRule{
+			rule := config.RawRule{
 				Trigger:    "t",
 				Action:     "tap:" + s.Key,
 				IntervalMS: clampInterval(s.IntervalMS, 300),
 				Strategy:   config.StrategyBuff,
-			})
+			}
+			if s.Priority > 0 {
+				rule.Priority = s.Priority
+			}
+			rules = append(rules, rule)
 		}
 	}
 
