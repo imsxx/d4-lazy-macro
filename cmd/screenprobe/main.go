@@ -18,6 +18,7 @@ import (
 	"image"
 	"image/png"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -43,6 +44,8 @@ func main() {
 	sat := flag.Int("sat", 40, "彩色判定的饱和度阈值（配合 -band）")
 	crop := flag.String("crop", "", "只保留客户区的该子区域 \"x,y,w,h\"，便于放大观察 UI 细节（-px/-band 随之一并改为相对该子区域）")
 	region := flag.String("region", "", "在矩形 \"x0,y0,x1,y1\" 内搜索：报告非黑包围盒与 G 通道峰值位置（用于定位 Buff 光晕）")
+	burst := flag.Int("burst", 0, "保存首张后继续连拍的张数，用于观察 Buff 生效 / 消失的过程")
+	interval := flag.Int("interval", 500, "连拍间隔（毫秒）")
 	flag.Parse()
 
 	if *delay > 0 {
@@ -72,17 +75,17 @@ func main() {
 	if err != nil {
 		die("截图失败：%v", err)
 	}
-	if *crop != "" {
-		cx, cy, cw, ch, ok := parseCrop(*crop)
-		if !ok {
-			die("-crop 格式错误，应为 x,y,w,h")
-		}
-		sub := win32.CropRGBA(img, int32(cx), int32(cy), int32(cw), int32(ch))
+	cropX, cropY, cropW, cropH, cropOK := parseCrop(*crop)
+	if *crop != "" && !cropOK {
+		die("-crop 格式错误，应为 x,y,w,h")
+	}
+	if cropOK {
+		sub := win32.CropRGBA(img, int32(cropX), int32(cropY), int32(cropW), int32(cropH))
 		if sub == nil {
 			die("-crop 区域超出画面范围")
 		}
 		fmt.Printf("已裁剪子区域：%dx%d（客户区偏移 %d,%d；后续 -px/-band 坐标均相对本子区域）\n",
-			sub.Bounds().Dx(), sub.Bounds().Dy(), cx, cy)
+			sub.Bounds().Dx(), sub.Bounds().Dy(), cropX, cropY)
 		img = sub
 	}
 	save(*out, img, used)
@@ -111,6 +114,36 @@ func main() {
 			scanBand(img, y0, y1, *sat)
 		}
 	}
+
+	// 连拍：观察 Buff 生效 / 消失这类随时间变化的过程。
+	for i := 1; i <= *burst; i++ {
+		time.Sleep(time.Duration(*interval) * time.Millisecond)
+		bi, _, err := shoot(target, *backend)
+		if err != nil {
+			fmt.Printf("[连拍] 第 %d 张失败：%v\n", i, err)
+			break
+		}
+		if cropOK {
+			if sub := win32.CropRGBA(bi, int32(cropX), int32(cropY), int32(cropW), int32(cropH)); sub != nil {
+				bi = sub
+			}
+		}
+		path := burstPath(*out, i)
+		if err := writePNG(path, bi); err != nil {
+			fmt.Printf("[连拍] 保存 %s 失败：%v\n", path, err)
+			break
+		}
+		fmt.Printf("[连拍 %d] %s 非黑 %.1f%%\n", i, path, win32.NonBlackRatio(bi)*100)
+		if *px != "" {
+			probePoints(bi, *px)
+		}
+	}
+}
+
+// burstPath 由首张文件名推出第 i 张连拍的文件名（out.png → out-03.png）。
+func burstPath(out string, i int) string {
+	ext := filepath.Ext(out)
+	return fmt.Sprintf("%s-%02d%s", strings.TrimSuffix(out, ext), i, ext)
 }
 
 func parseCrop(s string) (int, int, int, int, bool) {
@@ -432,18 +465,24 @@ func shoot(t target, backend string) (*image.RGBA, string, error) {
 	return img, "desktop", err
 }
 
-func save(path string, img *image.RGBA, used string) {
-	ratio := win32.NonBlackRatio(img)
-	start := time.Now()
+func writePNG(path string, img *image.RGBA) error {
 	f, err := os.Create(path)
 	if err != nil {
-		die("创建输出文件失败：%v", err)
+		return err
 	}
 	if err := png.Encode(f, img); err != nil {
 		_ = f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+func save(path string, img *image.RGBA, used string) {
+	ratio := win32.NonBlackRatio(img)
+	start := time.Now()
+	if err := writePNG(path, img); err != nil {
 		die("写入 PNG 失败：%v", err)
 	}
-	_ = f.Close()
 
 	b := img.Bounds()
 	fmt.Printf("截图后端：%s | 输出尺寸：%dx%d\n", used, b.Dx(), b.Dy())
