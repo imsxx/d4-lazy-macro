@@ -1111,6 +1111,8 @@ type settingsDlg struct {
 	quickPauseMouseKey *walk.ComboBox
 	quickPauseAction   *walk.ComboBox
 	quickPauseDelay    *walk.LineEdit
+
+	smartPauseCheck *walk.CheckBox
 }
 
 // openExtraSettings 打开「更多设置」对话框。
@@ -1122,7 +1124,7 @@ func (w *mainWindow) openExtraSettings() {
 	dlg := decl.Dialog{
 		AssignTo: &d.dlg,
 		Title:    "更多设置",
-		MinSize:  decl.Size{Width: 470, Height: 235},
+		MinSize:  decl.Size{Width: 470, Height: 345},
 		Layout:   decl.VBox{Margins: decl.Margins{Left: 12, Top: 10, Right: 12, Bottom: 10}, Spacing: 8},
 		Children: []decl.Widget{
 			decl.GroupBox{
@@ -1157,6 +1159,22 @@ func (w *mainWindow) openExtraSettings() {
 					},
 				},
 			},
+			decl.GroupBox{
+				Title:  "智能暂停",
+				Layout: decl.VBox{Margins: decl.Margins{Left: 10, Top: 8, Right: 10, Bottom: 8}, Spacing: 6},
+				Children: []decl.Widget{
+					decl.CheckBox{
+						AssignTo:    &d.smartPauseCheck,
+						Text:        "启用智能暂停（推荐）",
+						Checked:     w.app.settings.SmartPause,
+						ToolTipText: "按 Tab 打开地图时自动暂停宏，再按一次恢复；\n按 回车（聊天）、T（回城）、M（世界地图）时自动停止宏，避免对着界面误发技能",
+					},
+					decl.Label{
+						Text:      "　Tab：暂停 / 恢复　　回车 · T · M：停止宏",
+						TextColor: walk.RGB(110, 110, 110),
+					},
+				},
+			},
 			decl.Composite{
 				Layout: decl.HBox{MarginsZero: true, Spacing: 8},
 				Children: []decl.Widget{
@@ -1183,12 +1201,16 @@ func (d *settingsDlg) save(w *mainWindow) {
 		Action:   d.quickPauseAction.CurrentIndex() + 1,
 		DelayMS:  parseIntField(d.quickPauseDelay, store.QuickPauseMinDelayMS, store.QuickPauseMaxDelayMS, store.DefaultQuickPause().DelayMS),
 	}
+	smart := d.smartPauseCheck.Checked()
 	w.app.settings.QuickPause = qp
+	w.app.settings.SmartPause = smart
 	if err := store.SaveSettings(w.app.dir, *w.app.settings); err != nil {
 		w.fatal(err)
 		return
 	}
 	w.app.updateQuickPause(qp)
+	w.app.updateSmartPause(smart)
+	w.app.log.Printf("[设置] 智能暂停：%s", onOffText(smart))
 	state := "关闭"
 	if qp.Enabled {
 		state = "开启"

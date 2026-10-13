@@ -54,6 +54,7 @@ type runtimeSnapshot struct {
 	TargetProcess string
 	StartMode     int // 0: 懒人模式 (开关切换), 1: 仅按下时 (按住生效)
 	QuickPause    store.QuickPauseSettings
+	SmartPause    bool
 }
 
 // runtimeState 保存会被 UI 线程与 tick 线程并发访问的状态。
@@ -89,6 +90,10 @@ type app struct {
 	// 快速暂停的轮询状态（仅 tick 线程访问）
 	qpDown    bool
 	qpLastTap time.Time
+
+	// 智能暂停的轮询状态（仅 tick 线程访问；spPrev 的长度与 smartPauseStopKeys 一致）
+	spTab  bool
+	spPrev [3]bool
 
 	toggleAction   *walk.Action
 	profileActions []*walk.Action
@@ -261,7 +266,7 @@ func (a *app) loadGame(gameID string) error {
 	if err != nil {
 		return err
 	}
-	next := runtimeSnapshot{GameID: gameID, TargetProcess: target, QuickPause: a.settings.QuickPause}
+	next := runtimeSnapshot{GameID: gameID, TargetProcess: target, QuickPause: a.settings.QuickPause, SmartPause: a.settings.SmartPause}
 
 	snap, err := store.Load(a.dir, store.ConfigFile(gameID))
 	if err != nil {
@@ -648,6 +653,7 @@ func (a *app) applyConfig(raw *config.Raw, parsed *config.Parsed, profileIdx int
 		TargetProcess: target,
 		StartMode:     startMode,
 		QuickPause:    a.settings.QuickPause,
+		SmartPause:    a.settings.SmartPause,
 	})
 	if err := a.rebuildMenu(); err != nil {
 		a.log.Printf("[错误] 重建菜单失败：%v", err)
@@ -769,6 +775,8 @@ func (a *app) startTicker() {
 			}
 			// 快速暂停：按鼠标键（单击 / 双击 / 压住）临时停手
 			a.tickQuickPause(snap)
+			// 智能暂停：聊天 / 开地图 / 回城时自动让路
+			a.tickSmartPause(snap)
 
 			fg, err := win32.GetForegroundWindow()
 			foreground := err == nil && win32.MatchProcess(fg.ProcessName, snap.TargetProcess)
@@ -781,6 +789,50 @@ func (a *app) startTicker() {
 			}
 		}
 	}()
+}
+
+// smartPauseStopKeys 是智能暂停里「按下即停止宏」的键：回车（聊天）、T（回城）、M（世界地图）。
+// 这三个键会让游戏接管输入，此时继续发技能只会误操作。
+var smartPauseStopKeys = []uint16{keys.VKEnter, uint16('T'), uint16('M')}
+
+// tickSmartPause 在轮询循环里检测智能暂停的触发键（语义对齐 D3keyHelper）：
+// 按 Tab 暂停 / 恢复宏；按回车、T、M 停止宏。
+func (a *app) tickSmartPause(snap runtimeSnapshot) {
+	if !snap.SmartPause || snap.Engine == nil {
+		return
+	}
+	eng := snap.Engine
+	now := time.Now()
+
+	// Tab：切换暂停 / 恢复
+	tabDown := win32.KeyPressed(keys.VKTab)
+	if tabDown && !a.spTab {
+		if eng.Paused() {
+			eng.Resume()
+			a.log.Printf("[智能暂停] Tab → 恢复宏")
+		} else {
+			eng.QuickPause(now, 0, 0)
+			a.log.Printf("[智能暂停] Tab → 暂停宏")
+		}
+	}
+	a.spTab = tabDown
+
+	// 回车 / T / M：停止宏
+	for i, vk := range smartPauseStopKeys {
+		down := win32.KeyPressed(vk)
+		if down && !a.spPrev[i] && eng.Enabled() {
+			eng.SetEnabled(false)
+			a.log.Printf("[智能暂停] %s → 停止宏", keyName(vk))
+		}
+		a.spPrev[i] = down
+	}
+}
+
+// updateSmartPause 由界面在设置变更后调用：更新运行期快照，无需重建引擎。
+func (a *app) updateSmartPause(on bool) {
+	snap := a.st.snapshot()
+	snap.SmartPause = on
+	a.st.apply(snap)
 }
 
 // quickPauseDoubleClickWindow 是双击判定的时间窗。

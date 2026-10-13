@@ -15,6 +15,9 @@ const (
 	VKXButton1    = 0x05 // 鼠标后退侧键
 	VKXButton2    = 0x06 // 鼠标前进侧键
 
+	VKTab   = 0x09
+	VKEnter = 0x0D
+
 	VKLeftShift  = 0xA0
 	VKRightShift = 0xA1
 	VKLeftCtrl   = 0xA2
@@ -43,7 +46,7 @@ var named = map[string]uint16{
 	"LALT":   VKLeftAlt,
 	"RALT":   VKRightAlt,
 
-	"TAB":      0x09,
+	"TAB":      VKTab,
 	"ESC":      0x1B,
 	"SPACE":    0x20,
 	"CAPSLOCK": 0x14,
