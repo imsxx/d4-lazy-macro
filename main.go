@@ -227,14 +227,17 @@ func (a *app) run() int {
 
 func (a *app) quitApp() {
 	a.log.Printf("退出主程序")
+	if a.win != nil {
+		a.win.quitting = true
+		if a.win.wv != nil {
+			a.win.wv.Destroy()
+		}
+	}
 	_ = a.mw.Close()
 }
 
-// owner 返回对话框应使用的宿主窗口（优先主窗口）。
+// owner 返回对话框应使用的宿主窗口。
 func (a *app) owner() walk.Form {
-	if a.win != nil && a.win.mw != nil {
-		return a.win.mw
-	}
 	return a.mw
 }
 

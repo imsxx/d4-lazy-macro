@@ -7,8 +7,6 @@ import (
 	"strings"
 
 	"github.com/imsxx/diablo-lazy-macro/internal/keys"
-
-	"github.com/lxn/walk"
 )
 
 // keyChoice 是键位下拉里的一项：中文显示名 + 协议键名（internal/keys 白名单）。
@@ -100,48 +98,4 @@ func keySequenceNames(arg string) string {
 		return "（空序列）"
 	}
 	return strings.Join(names, " → ")
-}
-
-// setChoiceCombo 用候选项重建下拉并选中 token。token 不在候选中时**追加**一项，
-// 保证导入的分享码在界面上原样可见、不会被悄悄改写。返回本次实际使用的候选项。
-func (w *mainWindow) setChoiceCombo(cb *walk.ComboBox, base []keyChoice, token string) []keyChoice {
-	items := append([]keyChoice{}, base...)
-	token = strings.TrimSpace(token)
-	if token != "" && indexOfToken(items, token) < 0 {
-		items = append(items, keyChoice{keyNameOfToken(token), token})
-	}
-	labels := make([]string, 0, len(items))
-	for _, it := range items {
-		labels = append(labels, it.label)
-	}
-	if err := cb.SetModel(labels); err != nil {
-		w.fatal(err)
-		return items
-	}
-	idx := indexOfToken(items, token)
-	if idx < 0 {
-		idx = 0
-	}
-	if err := cb.SetCurrentIndex(idx); err != nil {
-		w.fatal(err)
-	}
-	return items
-}
-
-func indexOfToken(items []keyChoice, token string) int {
-	for i, it := range items {
-		if it.token == token {
-			return i
-		}
-	}
-	return -1
-}
-
-// comboTokenOf 返回下拉当前项对应的协议键名；越界或空项返回空串。
-func comboTokenOf(cb *walk.ComboBox, items []keyChoice) string {
-	idx := cb.CurrentIndex()
-	if idx < 0 || idx >= len(items) {
-		return ""
-	}
-	return items[idx].token
 }

@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Diablo Lazy Macro</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- 顶栏：自定义无边框拖拽标题栏 + 窗口控制 -->
+  <header class="app-header">
+    <div class="header-brand">
+      <span class="brand-badge">DLM</span>
+      <span class="brand-title">暗黑懒人宏</span>
+      <span class="brand-version" id="appVersion">v0.2.0</span>
+    </div>
+
+    <!-- 游戏切换按钮组 (分段式胶囊) -->
+    <div class="game-selector">
+      <button class="game-btn active" data-game="d3" onclick="switchGame('d3')">暗黑破坏神 3</button>
+      <button class="game-btn" data-game="d4" onclick="switchGame('d4')">暗黑破坏神 4</button>
+      <button class="game-btn" data-game="d2r" onclick="switchGame('d2r')">暗黑 2：重制版</button>
+    </div>
+
+    <!-- 快捷工具按钮组 -->
+    <div class="header-tools">
+      <button class="tool-btn" onclick="importCode()" title="从剪贴板导入分享码">导入分享码</button>
+      <button class="tool-btn" onclick="exportCode()" title="将当前配置复制为分享码">复制分享码</button>
+      <button class="tool-btn" onclick="openLog()" title="查看运行日志">运行日志</button>
+    </div>
+  </header>
+
+  <!-- 主体工作区：左右双栏对称仪表盘 -->
+  <main class="app-main">
+    <!-- ================= 左栏：技能方案工作区 ================= -->
+    <section class="column-left">
+      <!-- 方案 Tab 导航 -->
+      <div class="profile-tabs">
+        <button class="tab-btn active" data-tab="0" onclick="switchTab(0)">配置 1</button>
+        <button class="tab-btn" data-tab="1" onclick="switchTab(1)">配置 2</button>
+        <button class="tab-btn" data-tab="2" onclick="switchTab(2)">配置 3</button>
+        <button class="tab-btn" data-tab="3" onclick="switchTab(3)">配置 4</button>
+      </div>
+
+      <!-- 按键宏设置卡片 -->
+      <div class="card macro-card">
+        <div class="card-title">按键宏设置</div>
+        
+        <!-- 表头行 -->
+        <div class="slot-header">
+          <span class="col-slot">技能槽位</span>
+          <span class="col-key">快捷键</span>
+          <span class="col-strategy">释放策略</span>
+          <span class="col-interval">执行间隔 (ms)</span>
+          <span class="col-delay">延迟 (ms)</span>
+          <span class="col-random">±随机</span>
+        </div>
+
+        <!-- 6 行槽位容器 (动态渲染) -->
+        <div class="slot-list" id="slotList">
+          <!-- 由 JS 渲染 6 行槽位 -->
+        </div>
+      </div>
+
+      <!-- 额外设置卡片 -->
+      <div class="card extra-card">
+        <div class="card-title">额外设置</div>
+        <div class="extra-row">
+          <div class="form-item">
+            <span class="form-label">快速切换至本配置：</span>
+            <button class="keycap-btn sm" id="profileHkBtn" onclick="captureProfileHk()">无</button>
+          </div>
+          <div class="form-item">
+            <span class="form-label">配置名：</span>
+            <input type="text" class="input-text sm" id="profileNameInput" onchange="saveProfileName()" maxlength="12">
+          </div>
+          <div class="form-item">
+            <span class="form-label">按键模式：</span>
+            <select class="select-dropdown sm" id="profileModeSelect" onchange="saveProfileMode()">
+              <option value="concurrent">并发按键</option>
+              <option value="sequential">循环按键</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="extra-row">
+          <div class="form-item">
+            <span class="form-label">宏启动方式：</span>
+            <select class="select-dropdown md" id="startModeSelect" onchange="saveStartMode()">
+              <option value="0">懒人模式 (开关切换)</option>
+              <option value="1">仅按下时 (按住生效)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="extra-row">
+          <div class="form-item flex-grow">
+            <label class="checkbox-label">
+              <input type="checkbox" id="qpEnabled" onchange="saveQuickPause()">
+              <span>快速暂停：</span>
+            </label>
+            <select class="select-dropdown xs" id="qpTrigger" onchange="saveQuickPause()">
+              <option value="1">双击</option>
+              <option value="2">单击</option>
+              <option value="3">压住</option>
+            </select>
+            <select class="select-dropdown sm" id="qpMouseKey" onchange="saveQuickPause()">
+              <option value="1">左键</option>
+              <option value="2">右键</option>
+              <option value="3">中键</option>
+              <option value="4">侧键1</option>
+              <option value="5">侧键2</option>
+            </select>
+            <span class="form-text">则</span>
+            <select class="select-dropdown md" id="qpAction" onchange="saveQuickPause()">
+              <option value="1">暂停按键宏</option>
+              <option value="2">暂停且连点左键</option>
+            </select>
+            <input type="number" class="input-num xs" id="qpDelay" onchange="saveQuickPause()" min="500" max="5000">
+            <span class="form-text">ms</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= 右栏：全局总控与偏好 ================= -->
+    <section class="column-right">
+      <!-- 战斗宏启动快捷键醒目卡片 -->
+      <div class="card trigger-card">
+        <div class="trigger-header">
+          <span class="trigger-label">战斗宏启动快捷键：</span>
+          <button class="keycap-btn lg highlight" id="toggleKeyBtn" onclick="captureToggleKey()">X1</button>
+        </div>
+        <div class="trigger-sub">左键点击后按任意键录入，右键快捷选鼠标侧键/中键</div>
+      </div>
+
+      <!-- 辅助功能卡片 (暗黑3下显示完整功能，非暗黑3下纯净隐藏) -->
+      <div class="card helper-card" id="helperCard">
+        <div class="card-title accent">辅助功能 (暗黑 3 专属)</div>
+        <div class="helper-controls">
+          <div class="form-item">
+            <span class="form-label accent">助手宏启动快捷键：</span>
+            <input type="text" class="input-text xs" id="helperHotkeyInput" onchange="saveHelperSettings()" maxlength="8">
+          </div>
+          <div class="form-item">
+            <span class="form-label">动画速度：</span>
+            <select class="select-dropdown sm" id="helperSpeedSelect" onchange="saveHelperSettings()">
+              <option value="50">极快 (50ms)</option>
+              <option value="100">快速 (100ms)</option>
+              <option value="150">标准 (150ms)</option>
+              <option value="250">平稳 (250ms)</option>
+              <option value="400">宽松 (400ms)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-item">
+          <span class="form-label">魔盒重铸目标：</span>
+          <select class="select-dropdown sm" id="reforgeTargetSelect" onchange="saveHelperSettings()">
+            <option value="0">只重铸一次</option>
+            <option value="2">普通传奇</option>
+            <option value="3">远古传奇</option>
+            <option value="4">神圣装备</option>
+            <option value="5">太古传奇</option>
+          </select>
+          <label class="checkbox-label sm ml-auto">
+            <input type="checkbox" id="helperDevCheck" onchange="saveHelperSettings()">
+            <span>开发者日志</span>
+          </label>
+        </div>
+
+        <!-- 助手复选列表 -->
+        <div class="helper-checklist" id="helperChecklist">
+          <!-- 由 JS 渲染助手复选框 -->
+        </div>
+
+        <div class="helper-note">* 城镇助手要求游戏窗口化或无边框窗口化运行</div>
+      </div>
+
+      <!-- 操作偏好与防护卡片 -->
+      <div class="card pref-card">
+        <div class="card-title">操作偏好与防护</div>
+        <div class="pref-list">
+          <label class="checkbox-label">
+            <input type="checkbox" id="smartPauseCheck" onchange="savePreferences()">
+            <span>智能暂停 (Tab/回车/T/M)</span>
+          </label>
+          <div class="pref-desc">按 Tab 暂停/恢复；回车(打字)、T(回城)、M(地图) 自动停止宏</div>
+
+          <label class="checkbox-label">
+            <input type="checkbox" id="soundCueCheck" onchange="savePreferences()">
+            <span>快捷键切换配置成功时播放提示音</span>
+          </label>
+
+          <div class="pref-force-stand">
+            <label class="checkbox-label">
+              <input type="checkbox" id="forceStandCheck" onchange="saveForceStand()">
+              <span>连点左键自动按住站立键：</span>
+            </label>
+            <button class="keycap-btn sm" id="forceStandKeyBtn" onclick="captureForceStandKey()">Shift</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- 底部状态栏 Footer -->
+  <footer class="app-footer">
+    <div class="status-item">
+      <span class="status-label">当前激活配置：</span>
+      <span class="status-val red" id="activeProfileText">配置 1</span>
+    </div>
+    <div class="status-item">
+      <span class="status-pill ready" id="macroStatusPill">● 宏已就绪 (前台生效)</span>
+    </div>
+    <div class="status-item">
+      <span class="status-label">目标进程：</span>
+      <span class="status-val text-gray" id="targetProcessText">Diablo IV.exe</span>
+    </div>
+    <div class="status-item text-green" id="autoSaveIndicator">✓ 实时生效</div>
+    <div class="footer-spacer"></div>
+    <div class="footer-tech">Win32 SendInput · 零驱动零注入</div>
+  </footer>
+
+  <!-- 按键录入浮层模态框 -->
+  <div class="capture-overlay" id="captureOverlay" style="display: none;">
+    <div class="capture-box">
+      <div class="capture-title">请按下任意键盘按键或鼠标键</div>
+      <div class="capture-sub">（按 Escape 取消录入）</div>
+      <div class="capture-pulse"></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
