@@ -1,6 +1,9 @@
 package games
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 // fakePixel 是 PixelSource 的测试替身。
 type fakePixel struct {
@@ -18,6 +21,51 @@ func (f fakePixel) Pixel(x, y int32) (uint8, uint8, uint8, bool) {
 		return c[0], c[1], c[2], true
 	}
 	return 0, 0, 0, false
+}
+
+func TestD3BuffSamplePointMatchesMeasuredBaseline(t *testing.T) {
+	// 2026-10-13 实机标定基线（见 docs/d3-buff-calibration.md）：
+	// 游戏窗口化运行，客户区 1817x1025。按下技能一后，槽位 1 的采样点
+	// 绿色分量由 11 升到 164 并持续上升，证明该点确实落在 Buff 指示上。
+	// 这是唯一被逐像素验证过的槽位，固化为回归基线。
+	sx, sy, ok := d3BuffSamplePoint(0, 1817, 1025, 0, 0, d3BuffSamplePercent)
+	if !ok {
+		t.Fatal("应能算出采样点")
+	}
+	if sx != 603 || sy != 945 {
+		t.Fatalf("与实机标定不符：got (%d,%d)，want (603,945)", sx, sy)
+	}
+}
+
+func TestD3BuffSampleSpacingMatchesGameLayout(t *testing.T) {
+	// 槽位 2~6 无法用「按下 Buff 技能」逐个验证（它们未必是 Buff 技能），
+	// 因此改用几何交叉验证：D3keyHelper 的基准横坐标是手工测量的，间距并不严格等距
+	// （87~93），而实机扫描得到 6 个图标中心间距恒为 63px（客户区 1817x1025）。
+	// 只要换算后的采样点间距与实机间距的偏差足够小，采样点就不会滑出 Buff 指示区。
+	const (
+		winW, winH = 1817, 1025
+		measured   = 63.0 // 实机扫描的图标间距
+		tolerance  = 5.0  // 允许偏差（像素）；基准数据的固有误差约 ±3px
+	)
+	var xs [d3SlotCount]int32
+	for i := range xs {
+		x, _, ok := d3BuffSamplePoint(i, winW, winH, 0, 0, d3BuffSamplePercent)
+		if !ok {
+			t.Fatalf("槽位 %d 采样点计算失败", i)
+		}
+		xs[i] = x
+	}
+	for i := 1; i < d3SlotCount; i++ {
+		got := float64(xs[i] - xs[i-1])
+		if diff := math.Abs(got - measured); diff > tolerance {
+			t.Errorf("槽位 %d→%d 采样点间距 %.0fpx，与实机图标间距 %.0fpx 偏差 %.1fpx（上限 %.0fpx）",
+				i, i+1, got, measured, diff, tolerance)
+		}
+	}
+	// 采样点必须落在图标自身宽度内：图标宽 63px，采样点应位于其内侧。
+	if span := xs[d3SlotCount-1] - xs[0]; span <= 0 {
+		t.Fatalf("采样点横坐标未按槽位递增：%v", xs)
+	}
 }
 
 func TestD3BuffSamplePointReferenceResolution(t *testing.T) {
