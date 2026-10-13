@@ -22,9 +22,10 @@ const (
 	maxProfiles = 4
 	numSlots    = 6
 
-	// 左栏容纳 6 列槽位参数与每方案设置，右栏固定 300，再加外边距与栏间距。
+	// 窗口为三段式纵向布局：顶部全局控制条、中部方案配置（6 列槽位参数）、底部状态栏。
+	// 宽度由槽位表的列宽与顶部控件行共同决定。
 	fixedWinWidth  = 890
-	fixedWinHeight = 540
+	fixedWinHeight = 560
 )
 
 // 槽位表列宽：集中定义，便于与 fixedWinWidth 联动调整。
@@ -177,15 +178,112 @@ func (a *app) createMainWindow() error {
 		Layout:          decl.VBox{Margins: decl.Margins{Left: 10, Top: 8, Right: 10, Bottom: 6}, Spacing: 6},
 		OnKeyDown:       w.handleGlobalKeyDown,
 		Children: []decl.Widget{
-			// 主体区域：经典左右双栏架构 (左栏 530px 方案技能，右栏 300px 全局控制)
+			// ================= 顶部：全局控制条 =================
+			// 游戏切换、宏启停、状态与主要动作作用于「整个工具」而不是某个方案，
+			// 因此横跨窗口顶部；方案相关的设置留在下方的主体区域。
+			decl.GroupBox{
+				Title:  "全局控制",
+				Layout: decl.VBox{Margins: decl.Margins{Left: 10, Top: 6, Right: 10, Bottom: 6}, Spacing: 6},
+				Children: []decl.Widget{
+					decl.Composite{
+						Layout: decl.HBox{MarginsZero: true, Spacing: 8},
+						Children: []decl.Widget{
+							decl.Label{Text: "当前游戏：", MinSize: decl.Size{Width: 66}},
+							decl.ComboBox{
+								AssignTo:              &w.gameCombo,
+								MinSize:               decl.Size{Width: 150},
+								MaxSize:               decl.Size{Width: 150},
+								OnCurrentIndexChanged: w.onGameChanged,
+							},
+							decl.Label{
+								AssignTo: &w.statusLabel,
+								Text:     "🟢 宏已就绪（前台自动生效）",
+								Font:     decl.Font{Bold: true},
+							},
+							decl.HSpacer{},
+							decl.Label{Text: "★ 启动快捷键：", Font: decl.Font{Bold: true, PointSize: 9}},
+							decl.PushButton{
+								AssignTo:    &w.toggleKeyBtn,
+								Text:        "X1",
+								Font:        decl.Font{Bold: true, PointSize: 10},
+								MinSize:     decl.Size{Width: 84, Height: 30},
+								MaxSize:     decl.Size{Width: 84, Height: 30},
+								OnClicked:   func() { w.startCapture(-1, 100) },
+								OnKeyDown:   w.handleGlobalKeyDown,
+								ToolTipText: "左键点击捕获按键；右键菜单可快速绑定鼠标侧键(X1/X2)或中键\n默认 X1（鼠标侧键）：三款暗黑游戏的默认键位都不占用鼠标额外按键",
+								ContextMenuItems: []decl.MenuItem{
+									decl.Action{Text: "🖱️ 设为 鼠标侧键1 (X1)", OnTriggered: func() { w.setToggleKey("X1") }},
+									decl.Action{Text: "🖱️ 设为 鼠标侧键2 (X2)", OnTriggered: func() { w.setToggleKey("X2") }},
+									decl.Action{Text: "🖱️ 设为 鼠标中键 (MMB)", OnTriggered: func() { w.setToggleKey("MMB") }},
+									decl.Separator{},
+									decl.Action{Text: "⌨️ 设为 F2", OnTriggered: func() { w.setToggleKey("F2") }},
+									decl.Action{Text: "⌨️ 设为 ` (波浪号)", OnTriggered: func() { w.setToggleKey("`") }},
+								},
+							},
+							decl.Label{Text: "启动方式："},
+							decl.ComboBox{
+								AssignTo:              &w.startModeCombo,
+								Model:                 startModeNames,
+								MinSize:               decl.Size{Width: 150},
+								MaxSize:               decl.Size{Width: 150},
+								OnCurrentIndexChanged: w.onStartModeChanged,
+								ToolTipText:           "懒人模式：按一下开，再按一下关\n仅按下时：按住快捷键(如侧键)触发，松开立即停止",
+							},
+							decl.CheckBox{
+								AssignTo:         &w.forceStandCheck,
+								Text:             "左键自动站立",
+								OnCheckedChanged: w.onForceStandToggled,
+								ToolTipText:      "连点左键技能时自动按住强制站立键，避免角色走动（暗黑3 的左键既是移动又是主要技能）\n键位需与游戏内「按键绑定」保持一致，点右侧按钮可改",
+							},
+							decl.PushButton{
+								AssignTo:    &w.forceStandKeyBtn,
+								Text:        "LSHIFT",
+								MinSize:     decl.Size{Width: 78, Height: 24},
+								MaxSize:     decl.Size{Width: 78, Height: 24},
+								OnClicked:   func() { w.startCapture(-1, 102) },
+								OnKeyDown:   w.handleGlobalKeyDown,
+								ToolTipText: "强制站立键：点此按钮后按任意键录入；默认 LSHIFT（暗黑3 的默认绑定）",
+								ContextMenuItems: []decl.MenuItem{
+									decl.Action{Text: "⌨️ 恢复默认 (LShift)", OnTriggered: func() { w.setForceStandKey("") }},
+									decl.Separator{},
+									decl.Action{Text: "⌨️ 设为 LShift", OnTriggered: func() { w.setForceStandKey("LSHIFT") }},
+									decl.Action{Text: "⌨️ 设为 LCtrl", OnTriggered: func() { w.setForceStandKey("LCTRL") }},
+									decl.Action{Text: "⌨️ 设为 LAlt", OnTriggered: func() { w.setForceStandKey("LALT") }},
+								},
+							},
+						},
+					},
+					decl.Composite{
+						Layout: decl.HBox{MarginsZero: true, Spacing: 8},
+						Children: []decl.Widget{
+							decl.Label{
+								Text:      "⚠ 屏幕识别（保持Buff）需游戏窗口化运行",
+								TextColor: walk.RGB(150, 96, 32),
+								ToolTipText: "暗黑3 的「保持Buff」依赖屏幕取色。全屏独占模式下游戏不参与桌面合成，" +
+									"取色会失败、守卫随之失效；请在游戏设置里改用「窗口化」或「无边框窗口化」。",
+							},
+							decl.HSpacer{},
+							decl.PushButton{
+								Text:      "💾 保存并应用配置",
+								Font:      decl.Font{Bold: true, PointSize: 9},
+								MinSize:   decl.Size{Height: 28},
+								OnClicked: w.saveAndApply,
+							},
+							decl.PushButton{Text: "📋 导入分享码", MinSize: decl.Size{Height: 28}, OnClicked: func() { a.importFromClipboard() }},
+							decl.PushButton{Text: "📤 复制分享码", MinSize: decl.Size{Height: 28}, OnClicked: w.exportCode},
+							decl.PushButton{Text: "⚙ 更多设置", MinSize: decl.Size{Height: 28}, OnClicked: w.openExtraSettings},
+							decl.PushButton{Text: "📄 运行日志", MinSize: decl.Size{Height: 28}, OnClicked: a.showLogWindow},
+						},
+					},
+				},
+			},
+
+			// ================= 主体：4 个方案的技能配置 =================
 			decl.Composite{
 				Layout: decl.HBox{MarginsZero: true, Spacing: 8},
 				Children: []decl.Widget{
-					// ================= 左栏：方案技能与按键设置 =================
 					decl.Composite{
-						MinSize: decl.Size{Width: 545},
-						MaxSize: decl.Size{Width: 545},
-						Layout:  decl.VBox{MarginsZero: true, Spacing: 4},
+						Layout: decl.VBox{MarginsZero: true, Spacing: 4},
 						Children: []decl.Widget{
 							decl.TabWidget{
 								AssignTo:              &w.tabWidget,
@@ -200,172 +298,38 @@ func (a *app) createMainWindow() error {
 						},
 					},
 
-					// ================= 右栏：全局仪表盘与总控制 =================
+					// 原「右栏全局控制」已上移到窗口顶部，这里不再保留第二栏。
 					decl.Composite{
-						MinSize: decl.Size{Width: 295},
-						MaxSize: decl.Size{Width: 295},
-						Layout:  decl.VBox{MarginsZero: true, Spacing: 6},
+						Layout:   decl.VBox{MarginsZero: true},
+						MinSize:  decl.Size{Width: 0},
+						MaxSize:  decl.Size{Width: 0},
 						Children: []decl.Widget{
-							// 1. 战斗宏启停总控卡片 (视觉重心，红字加粗突出)
-							decl.GroupBox{
-								Title:  "战斗宏总控",
-								Layout: decl.VBox{Margins: decl.Margins{Left: 10, Top: 8, Right: 10, Bottom: 8}, Spacing: 6},
-								Children: []decl.Widget{
-									decl.Composite{
-										Layout: decl.HBox{MarginsZero: true, Spacing: 6},
-										Children: []decl.Widget{
-											decl.Label{
-												Text:    "★ 启动快捷键：",
-												Font:    decl.Font{Bold: true, PointSize: 9},
-												MinSize: decl.Size{Width: 100},
-											},
-											decl.PushButton{
-												AssignTo:    &w.toggleKeyBtn,
-												Text:        "X1",
-												Font:        decl.Font{Bold: true, PointSize: 10},
-												MinSize:     decl.Size{Width: 90, Height: 30},
-												MaxSize:     decl.Size{Width: 90, Height: 30},
-												OnClicked:   func() { w.startCapture(-1, 100) },
-												OnKeyDown:   w.handleGlobalKeyDown,
-												ToolTipText: "左键点击捕获按键；右键菜单可快速绑定鼠标侧键(X1/X2)或中键\n默认 X1（鼠标侧键）：三款暗黑游戏的默认键位都不占用鼠标额外按键",
-												ContextMenuItems: []decl.MenuItem{
-													decl.Action{Text: "🖱️ 设为 鼠标侧键1 (X1)", OnTriggered: func() { w.setToggleKey("X1") }},
-													decl.Action{Text: "🖱️ 设为 鼠标侧键2 (X2)", OnTriggered: func() { w.setToggleKey("X2") }},
-													decl.Action{Text: "🖱️ 设为 鼠标中键 (MMB)", OnTriggered: func() { w.setToggleKey("MMB") }},
-													decl.Separator{},
-													decl.Action{Text: "⌨️ 设为 F2", OnTriggered: func() { w.setToggleKey("F2") }},
-													decl.Action{Text: "⌨️ 设为 ` (波浪号)", OnTriggered: func() { w.setToggleKey("`") }},
-												},
-											},
-											decl.HSpacer{},
-										},
-									},
-									decl.Composite{
-										Layout: decl.HBox{MarginsZero: true, Spacing: 6},
-										Children: []decl.Widget{
-											decl.Label{Text: "宏启动方式：", MinSize: decl.Size{Width: 80}},
-											decl.ComboBox{
-												AssignTo:              &w.startModeCombo,
-												Model:                 startModeNames,
-												MinSize:               decl.Size{Width: 160},
-												MaxSize:               decl.Size{Width: 160},
-												OnCurrentIndexChanged: w.onStartModeChanged,
-												ToolTipText:           "懒人模式：按一下开，再按一下关\n仅按下时：按住快捷键(如侧键)触发，松开立即停止",
-											},
-											decl.HSpacer{},
-										},
-									},
-								},
-							},
 
-							// 2. 目标游戏与运行状态卡片
-							decl.GroupBox{
-								Title:  "目标游戏与状态",
-								Layout: decl.VBox{Margins: decl.Margins{Left: 10, Top: 8, Right: 10, Bottom: 8}, Spacing: 6},
-								Children: []decl.Widget{
-									decl.Composite{
-										Layout: decl.HBox{MarginsZero: true, Spacing: 6},
-										Children: []decl.Widget{
-											decl.Label{Text: "当前游戏：", MinSize: decl.Size{Width: 70}},
-											decl.ComboBox{
-												AssignTo:              &w.gameCombo,
-												MinSize:               decl.Size{Width: 170},
-												MaxSize:               decl.Size{Width: 170},
-												OnCurrentIndexChanged: w.onGameChanged,
-											},
-											decl.HSpacer{},
-										},
-									},
-									decl.Label{
-										AssignTo: &w.statusLabel,
-										Text:     "🟢 宏已就绪（前台自动生效）",
-										Font:     decl.Font{Bold: true},
-									},
-									decl.Label{
-										AssignTo: &w.targetProcLbl,
-										Text:     "🎮 目标进程：Diablo IV.exe",
-									},
-									decl.Composite{
-										Layout: decl.HBox{MarginsZero: true, Spacing: 6},
-										Children: []decl.Widget{
-											decl.CheckBox{
-												AssignTo:         &w.forceStandCheck,
-												Text:             "左键自动站立",
-												OnCheckedChanged: w.onForceStandToggled,
-												ToolTipText:      "连点左键技能时自动按住强制站立键，避免角色走动（暗黑3 的左键既是移动又是主要技能）\n键位需与游戏内「按键绑定」保持一致，点右侧按钮可改",
-											},
-											decl.PushButton{
-												AssignTo:    &w.forceStandKeyBtn,
-												Text:        "LSHIFT",
-												MinSize:     decl.Size{Width: 78, Height: 24},
-												MaxSize:     decl.Size{Width: 78, Height: 24},
-												OnClicked:   func() { w.startCapture(-1, 102) },
-												OnKeyDown:   w.handleGlobalKeyDown,
-												ToolTipText: "强制站立键：点此按钮后按任意键录入；默认 LSHIFT（暗黑3 的默认绑定）",
-												ContextMenuItems: []decl.MenuItem{
-													decl.Action{Text: "⌨️ 恢复默认 (LShift)", OnTriggered: func() { w.setForceStandKey("") }},
-													decl.Separator{},
-													decl.Action{Text: "⌨️ 设为 LShift", OnTriggered: func() { w.setForceStandKey("LSHIFT") }},
-													decl.Action{Text: "⌨️ 设为 LCtrl", OnTriggered: func() { w.setForceStandKey("LCTRL") }},
-													decl.Action{Text: "⌨️ 设为 LAlt", OnTriggered: func() { w.setForceStandKey("LALT") }},
-												},
-											},
-											decl.HSpacer{},
-										},
-									},
-								},
-							},
 
-							// 屏幕识别的运行前提：全屏独占模式下游戏不参与桌面合成，取色必然失败，
-							// 因此在这里明确告知用户，而不是让他在游戏里排查「为什么 Buff 守卫不工作」。
-							decl.Label{
-								Text:      "⚠ 屏幕识别（保持Buff）需游戏窗口化运行",
-								TextColor: walk.RGB(150, 96, 32),
-								ToolTipText: "暗黑3 的「保持Buff」依赖屏幕取色。全屏独占模式下游戏不参与桌面合成，" +
-									"取色会失败、守卫随之失效；请在游戏设置里改用「窗口化」或「无边框窗口化」。",
-							},
 
-							// 3. 快捷操作卡片
-							decl.GroupBox{
-								Title:  "快捷操作",
-								Layout: decl.VBox{Margins: decl.Margins{Left: 10, Top: 8, Right: 10, Bottom: 8}, Spacing: 6},
-								Children: []decl.Widget{
-									decl.PushButton{
-										Text:      "💾 保存并应用配置",
-										Font:      decl.Font{Bold: true, PointSize: 9},
-										MinSize:   decl.Size{Height: 28},
-										OnClicked: w.saveAndApply,
-									},
-									decl.Composite{
-										Layout: decl.HBox{MarginsZero: true, Spacing: 6},
-										Children: []decl.Widget{
-											decl.PushButton{Text: "📋 导入分享码", MinSize: decl.Size{Height: 26}, OnClicked: func() { a.importFromClipboard() }},
-											decl.PushButton{Text: "📤 复制分享码", MinSize: decl.Size{Height: 26}, OnClicked: w.exportCode},
-										},
-									},
-									decl.PushButton{Text: "📄 查看运行日志", MinSize: decl.Size{Height: 26}, OnClicked: a.showLogWindow},
-									decl.PushButton{Text: "⚙ 更多设置（快速暂停等）", MinSize: decl.Size{Height: 26}, OnClicked: w.openExtraSettings},
-								},
-							},
-							decl.VSpacer{},
+
+
 						},
 					},
 				},
 			},
 
-			// 底部状态栏：显式标红突出当前激活配置与安全保障
+			// ================= 底部：状态栏 =================
+			// 只读状态集中于此，与顶部的可操作控件分开：看状态不用去找控件，找控件也不用翻状态。
 			decl.Composite{
-				Layout: decl.HBox{Margins: decl.Margins{Left: 4, Top: 2, Right: 4, Bottom: 2}, Spacing: 10},
+				Layout: decl.HBox{Margins: decl.Margins{Left: 4, Top: 4, Right: 4, Bottom: 2}, Spacing: 14},
 				Children: []decl.Widget{
 					decl.Label{
 						AssignTo: &w.activeProfLbl,
 						Text:     "当前激活配置：配置 1",
 						Font:     decl.Font{Bold: true, PointSize: 9},
 					},
-					decl.HSpacer{},
 					decl.Label{
-						Text: "Win32 SendInput · 零驱动零注入 · 智能找色续航已就绪",
+						AssignTo: &w.targetProcLbl,
+						Text:     "🎮 目标进程：Diablo IV.exe",
 					},
+					decl.HSpacer{},
+					decl.Label{Text: "Win32 SendInput · 零驱动零注入"},
 				},
 			},
 		},
@@ -400,7 +364,7 @@ func (a *app) createMainWindow() error {
 	// 4. 在完全加载配置、调整好坐标并完成初次渲染后再显示，彻底杜绝白屏闪烁
 	w.loadFromState()
 	w.mw.Show()
-	a.log.Printf("[窗口] 主窗口已打开（固定尺寸 %dx%d，左右双栏布局）", fixedWinWidth, fixedWinHeight)
+	a.log.Printf("[窗口] 主窗口已打开（固定尺寸 %dx%d，顶部全局 / 中部方案 / 底部状态）", fixedWinWidth, fixedWinHeight)
 	return nil
 }
 
