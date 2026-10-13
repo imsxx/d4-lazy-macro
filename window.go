@@ -25,20 +25,25 @@ const (
 	// 窗口为三段式纵向布局：顶部全局控制条、中部方案配置（6 列槽位参数）、底部状态栏。
 	// 宽度由「顶部第一行的控件总宽」决定（游戏选择 + 状态 + 启动键 + 启动方式 + 强制站立），
 	// 高度由「顶部两行 + 槽位表 6 行 + 本配置设置 + 底部状态栏」决定。
-	fixedWinWidth  = 1140
-	fixedWinHeight = 630
+	fixedWinWidth  = 1270
+	fixedWinHeight = 720
 )
 
 // 槽位表列宽：集中定义，便于与 fixedWinWidth 联动调整。
 const (
-	colSlotName   = 130
-	colKey        = 140
-	colStrategy   = 220
-	colInterval   = 140
-	colDelay      = 130
-	colRandom     = 110
-	colRowSpacing = 8
+	colSlotName   = 150
+	colKey        = 170
+	colStrategy   = 260
+	colInterval   = 170
+	colDelay      = 150
+	colRandom     = 130
+	colRowSpacing = 4
 )
+
+// ctrlHeight 是按钮、下拉、输入框的统一高度。
+// 同一行里控件高度不一致时，walk 会各自按自身高度在行内居中，视觉上就是「有的偏上有的偏下」，
+// 因此一律取同一高度，靠布局对齐而不是靠逐处微调。
+const ctrlHeight = 26
 
 // 延迟的界面取值范围：与协议校验保持一致，避免界面允许但保存时被拒。
 const maxDelayUI = 30000
@@ -168,7 +173,7 @@ func (a *app) createMainWindow() error {
 		AssignTo:        &w.mw,
 		Title:           fmt.Sprintf("%s v%s", appName, version),
 		Icon:            a.icon,
-		Font:            decl.Font{Family: "Microsoft YaHei UI", PointSize: 9},
+		Font:            decl.Font{Family: "Microsoft YaHei UI"},
 		Bounds:          decl.Rectangle{X: posX, Y: posY, Width: fixedWinWidth, Height: fixedWinHeight},
 		Size:            decl.Size{Width: fixedWinWidth, Height: fixedWinHeight},
 		MinSize:         decl.Size{Width: fixedWinWidth, Height: fixedWinHeight},
@@ -198,27 +203,27 @@ func (a *app) createMainWindow() error {
 							},
 							decl.Label{
 								AssignTo: &w.statusLabel,
-								Text:     "🟢 宏已就绪（前台自动生效）",
+								Text:     "宏已就绪（前台自动生效）",
 								Font:     decl.Font{Bold: true},
 							},
 							decl.HSpacer{},
-							decl.Label{Text: "★ 启动快捷键：", Font: decl.Font{Bold: true, PointSize: 9}},
+							decl.Label{Text: "启动快捷键：", Font: decl.Font{Bold: true}},
 							decl.PushButton{
 								AssignTo:    &w.toggleKeyBtn,
 								Text:        "X1",
-								Font:        decl.Font{Bold: true, PointSize: 10},
-								MinSize:     decl.Size{Width: 84, Height: 30},
-								MaxSize:     decl.Size{Width: 84, Height: 30},
+								Font:        decl.Font{Bold: true},
+								MinSize:     decl.Size{Width: 84, Height: ctrlHeight},
+								MaxSize:     decl.Size{Width: 84, Height: ctrlHeight},
 								OnClicked:   func() { w.startCapture(-1, 100) },
 								OnKeyDown:   w.handleGlobalKeyDown,
 								ToolTipText: "左键点击捕获按键；右键菜单可快速绑定鼠标侧键(X1/X2)或中键\n默认 X1（鼠标侧键）：三款暗黑游戏的默认键位都不占用鼠标额外按键",
 								ContextMenuItems: []decl.MenuItem{
-									decl.Action{Text: "🖱️ 设为 鼠标侧键1 (X1)", OnTriggered: func() { w.setToggleKey("X1") }},
-									decl.Action{Text: "🖱️ 设为 鼠标侧键2 (X2)", OnTriggered: func() { w.setToggleKey("X2") }},
-									decl.Action{Text: "🖱️ 设为 鼠标中键 (MMB)", OnTriggered: func() { w.setToggleKey("MMB") }},
+									decl.Action{Text: "设为 鼠标侧键1 (X1)", OnTriggered: func() { w.setToggleKey("X1") }},
+									decl.Action{Text: "设为 鼠标侧键2 (X2)", OnTriggered: func() { w.setToggleKey("X2") }},
+									decl.Action{Text: "设为 鼠标中键 (MMB)", OnTriggered: func() { w.setToggleKey("MMB") }},
 									decl.Separator{},
-									decl.Action{Text: "⌨️ 设为 F2", OnTriggered: func() { w.setToggleKey("F2") }},
-									decl.Action{Text: "⌨️ 设为 ` (波浪号)", OnTriggered: func() { w.setToggleKey("`") }},
+									decl.Action{Text: "设为 F2", OnTriggered: func() { w.setToggleKey("F2") }},
+									decl.Action{Text: "设为 ` (波浪号)", OnTriggered: func() { w.setToggleKey("`") }},
 								},
 							},
 							decl.Label{Text: "启动方式："},
@@ -239,17 +244,17 @@ func (a *app) createMainWindow() error {
 							decl.PushButton{
 								AssignTo:    &w.forceStandKeyBtn,
 								Text:        "LSHIFT",
-								MinSize:     decl.Size{Width: 78, Height: 24},
-								MaxSize:     decl.Size{Width: 78, Height: 24},
+								MinSize:     decl.Size{Width: 78, Height: ctrlHeight},
+								MaxSize:     decl.Size{Width: 78, Height: ctrlHeight},
 								OnClicked:   func() { w.startCapture(-1, 102) },
 								OnKeyDown:   w.handleGlobalKeyDown,
 								ToolTipText: "强制站立键：点此按钮后按任意键录入；默认 LSHIFT（暗黑3 的默认绑定）",
 								ContextMenuItems: []decl.MenuItem{
-									decl.Action{Text: "⌨️ 恢复默认 (LShift)", OnTriggered: func() { w.setForceStandKey("") }},
+									decl.Action{Text: "恢复默认 (LShift)", OnTriggered: func() { w.setForceStandKey("") }},
 									decl.Separator{},
-									decl.Action{Text: "⌨️ 设为 LShift", OnTriggered: func() { w.setForceStandKey("LSHIFT") }},
-									decl.Action{Text: "⌨️ 设为 LCtrl", OnTriggered: func() { w.setForceStandKey("LCTRL") }},
-									decl.Action{Text: "⌨️ 设为 LAlt", OnTriggered: func() { w.setForceStandKey("LALT") }},
+									decl.Action{Text: "设为 LShift", OnTriggered: func() { w.setForceStandKey("LSHIFT") }},
+									decl.Action{Text: "设为 LCtrl", OnTriggered: func() { w.setForceStandKey("LCTRL") }},
+									decl.Action{Text: "设为 LAlt", OnTriggered: func() { w.setForceStandKey("LALT") }},
 								},
 							},
 						},
@@ -258,22 +263,22 @@ func (a *app) createMainWindow() error {
 						Layout: decl.HBox{MarginsZero: true, Spacing: 8},
 						Children: []decl.Widget{
 							decl.Label{
-								Text:      "⚠ 屏幕识别（保持Buff）需游戏窗口化运行",
+								Text:      "屏幕识别（保持Buff）需游戏窗口化运行",
 								TextColor: walk.RGB(150, 96, 32),
 								ToolTipText: "暗黑3 的「保持Buff」依赖屏幕取色。全屏独占模式下游戏不参与桌面合成，" +
 									"取色会失败、守卫随之失效；请在游戏设置里改用「窗口化」或「无边框窗口化」。",
 							},
 							decl.HSpacer{},
 							decl.PushButton{
-								Text:      "💾 保存并应用配置",
-								Font:      decl.Font{Bold: true, PointSize: 9},
-								MinSize:   decl.Size{Height: 28},
+								Text:      "保存并应用配置",
+								Font:      decl.Font{Bold: true},
+								MinSize:   decl.Size{Height: ctrlHeight},
 								OnClicked: w.saveAndApply,
 							},
-							decl.PushButton{Text: "📋 导入分享码", MinSize: decl.Size{Height: 28}, OnClicked: func() { a.importFromClipboard() }},
-							decl.PushButton{Text: "📤 复制分享码", MinSize: decl.Size{Height: 28}, OnClicked: w.exportCode},
-							decl.PushButton{Text: "⚙ 更多设置", MinSize: decl.Size{Height: 28}, OnClicked: w.openExtraSettings},
-							decl.PushButton{Text: "📄 运行日志", MinSize: decl.Size{Height: 28}, OnClicked: a.showLogWindow},
+							decl.PushButton{Text: "导入分享码", MinSize: decl.Size{Height: ctrlHeight}, OnClicked: func() { a.importFromClipboard() }},
+							decl.PushButton{Text: "复制分享码", MinSize: decl.Size{Height: ctrlHeight}, OnClicked: w.exportCode},
+							decl.PushButton{Text: "更多设置", MinSize: decl.Size{Height: ctrlHeight}, OnClicked: w.openExtraSettings},
+							decl.PushButton{Text: "运行日志", MinSize: decl.Size{Height: ctrlHeight}, OnClicked: a.showLogWindow},
 						},
 					},
 				},
@@ -323,11 +328,11 @@ func (a *app) createMainWindow() error {
 					decl.Label{
 						AssignTo: &w.activeProfLbl,
 						Text:     "当前激活配置：配置 1",
-						Font:     decl.Font{Bold: true, PointSize: 9},
+						Font:     decl.Font{Bold: true},
 					},
 					decl.Label{
 						AssignTo: &w.targetProcLbl,
-						Text:     "🎮 目标进程：Diablo IV.exe",
+						Text:     "目标进程：Diablo IV.exe",
 					},
 					decl.HSpacer{},
 					decl.Label{Text: "Win32 SendInput · 零驱动零注入"},
@@ -419,8 +424,8 @@ func (w *mainWindow) createTabPage(tabIdx int) decl.TabPage {
 					decl.PushButton{
 						AssignTo:    &w.switchKeyBtns[t],
 						Text:        "无",
-						MinSize:     decl.Size{Width: 70, Height: 24},
-						MaxSize:     decl.Size{Width: 70, Height: 24},
+						MinSize:     decl.Size{Width: 70, Height: ctrlHeight},
+						MaxSize:     decl.Size{Width: 70, Height: ctrlHeight},
 						OnClicked:   func() { w.startCapture(t, 101) },
 						OnKeyDown:   w.handleGlobalKeyDown,
 						ToolTipText: "在游戏中按下此键，可无缝秒切至本套配置；右键可清除",
@@ -452,19 +457,19 @@ func (w *mainWindow) createSlotRow(t, s int, labelText string) decl.Widget {
 			decl.PushButton{
 				AssignTo:    &w.slotKeyBtns[t][s],
 				Text:        "1",
-				MinSize:     decl.Size{Width: colKey, Height: 24},
-				MaxSize:     decl.Size{Width: colKey, Height: 24},
+				MinSize:     decl.Size{Width: colKey, Height: ctrlHeight},
+				MaxSize:     decl.Size{Width: colKey, Height: ctrlHeight},
 				OnClicked:   func() { w.startCapture(t, s) },
 				OnKeyDown:   w.handleGlobalKeyDown,
 				ToolTipText: "左键点击后按键盘任意键录入；右键弹出菜单快速选择鼠标侧键/按键",
 				ContextMenuItems: []decl.MenuItem{
-					decl.Action{Text: "🖱️ 设为 鼠标左键 (LMB)", OnTriggered: func() { w.setSlotKey(t, s, "LMB") }},
-					decl.Action{Text: "🖱️ 设为 鼠标右键 (RMB)", OnTriggered: func() { w.setSlotKey(t, s, "RMB") }},
-					decl.Action{Text: "🖱️ 设为 鼠标中键 (MMB)", OnTriggered: func() { w.setSlotKey(t, s, "MMB") }},
-					decl.Action{Text: "🖱️ 设为 鼠标侧键1 (X1)", OnTriggered: func() { w.setSlotKey(t, s, "X1") }},
-					decl.Action{Text: "🖱️ 设为 鼠标侧键2 (X2)", OnTriggered: func() { w.setSlotKey(t, s, "X2") }},
+					decl.Action{Text: "设为 鼠标左键 (LMB)", OnTriggered: func() { w.setSlotKey(t, s, "LMB") }},
+					decl.Action{Text: "设为 鼠标右键 (RMB)", OnTriggered: func() { w.setSlotKey(t, s, "RMB") }},
+					decl.Action{Text: "设为 鼠标中键 (MMB)", OnTriggered: func() { w.setSlotKey(t, s, "MMB") }},
+					decl.Action{Text: "设为 鼠标侧键1 (X1)", OnTriggered: func() { w.setSlotKey(t, s, "X1") }},
+					decl.Action{Text: "设为 鼠标侧键2 (X2)", OnTriggered: func() { w.setSlotKey(t, s, "X2") }},
 					decl.Separator{},
-					decl.Action{Text: "⌨️ 恢复默认键", OnTriggered: func() { w.resetSlotKey(t, s) }},
+					decl.Action{Text: "恢复默认键", OnTriggered: func() { w.resetSlotKey(t, s) }},
 				},
 			},
 			decl.ComboBox{
@@ -639,13 +644,13 @@ func (w *mainWindow) refreshStatus() {
 		profName = w.profileNames[w.profileIdx]
 	}
 	w.setLabel(w.activeProfLbl, fmt.Sprintf("当前激活配置：%s", profName))
-	w.setLabel(w.targetProcLbl, fmt.Sprintf("🎮 目标进程：%s", snap.TargetProcess))
+	w.setLabel(w.targetProcLbl, fmt.Sprintf("目标进程：%s", snap.TargetProcess))
 
 	if snap.StartMode == 1 { // 仅按下时 (按住生效)
 		if snap.Engine != nil && snap.Engine.Enabled() {
-			w.setLabel(w.statusLabel, fmt.Sprintf("🟢 宏运行中（按住 %s 生效中）", toggleName))
+			w.setLabel(w.statusLabel, fmt.Sprintf("宏运行中（按住 %s 生效中）", toggleName))
 		} else {
-			w.setLabel(w.statusLabel, fmt.Sprintf("🟡 按住生效模式（按住 %s 触发，松开即停）", toggleName))
+			w.setLabel(w.statusLabel, fmt.Sprintf("按住生效模式（按住 %s 触发，松开即停）", toggleName))
 		}
 		return
 	}
@@ -653,11 +658,11 @@ func (w *mainWindow) refreshStatus() {
 	// 懒人模式 (开关切换)
 	switch {
 	case snap.Engine == nil:
-		w.setLabel(w.statusLabel, "🟢 宏已就绪（进入游戏窗口自动生效）")
+		w.setLabel(w.statusLabel, "宏已就绪（进入游戏窗口自动生效）")
 	case snap.Engine.Enabled():
-		w.setLabel(w.statusLabel, fmt.Sprintf("🟢 宏已就绪（前台自动生效 · 按 %s 暂停）", toggleName))
+		w.setLabel(w.statusLabel, fmt.Sprintf("宏已就绪（前台自动生效 · 按 %s 暂停）", toggleName))
 	default:
-		w.setLabel(w.statusLabel, fmt.Sprintf("⏸️ 宏已暂停（在游戏内按 %s 恢复运行）", toggleName))
+		w.setLabel(w.statusLabel, fmt.Sprintf("宏已暂停（在游戏内按 %s 恢复运行）", toggleName))
 	}
 }
 
@@ -1185,8 +1190,8 @@ func (w *mainWindow) openExtraSettings() {
 				Layout: decl.HBox{MarginsZero: true, Spacing: 8},
 				Children: []decl.Widget{
 					decl.HSpacer{},
-					decl.PushButton{Text: "确定", MinSize: decl.Size{Width: 80, Height: 28}, MaxSize: decl.Size{Width: 80, Height: 28}, OnClicked: func() { d.save(w) }},
-					decl.PushButton{Text: "取消", MinSize: decl.Size{Width: 80, Height: 28}, MaxSize: decl.Size{Width: 80, Height: 28}, OnClicked: func() { d.dlg.Close(0) }},
+					decl.PushButton{Text: "确定", MinSize: decl.Size{Width: 80, Height: ctrlHeight}, MaxSize: decl.Size{Width: 80, Height: ctrlHeight}, OnClicked: func() { d.save(w) }},
+					decl.PushButton{Text: "取消", MinSize: decl.Size{Width: 80, Height: ctrlHeight}, MaxSize: decl.Size{Width: 80, Height: ctrlHeight}, OnClicked: func() { d.dlg.Close(0) }},
 				},
 			},
 		},
@@ -1217,7 +1222,7 @@ func (w *mainWindow) openExtraSettings() {
 			Layout: decl.VBox{Margins: decl.Margins{Left: 10, Top: 8, Right: 10, Bottom: 8}, Spacing: 6},
 			Children: []decl.Widget{
 				decl.Label{
-					Text:      "⚠ 需游戏窗口化运行，且技能宏处于停止状态（助手与宏互斥）",
+					Text:      "需游戏窗口化运行，且技能宏处于停止状态（助手与宏互斥）",
 					TextColor: walk.RGB(150, 96, 32),
 				},
 				decl.Composite{
