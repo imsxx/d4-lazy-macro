@@ -23,20 +23,21 @@ const (
 	numSlots    = 6
 
 	// 窗口为三段式纵向布局：顶部全局控制条、中部方案配置（6 列槽位参数）、底部状态栏。
-	// 宽度由槽位表的列宽与顶部控件行共同决定。
-	fixedWinWidth  = 890
-	fixedWinHeight = 560
+	// 宽度由「顶部第一行的控件总宽」决定（游戏选择 + 状态 + 启动键 + 启动方式 + 强制站立），
+	// 高度由「顶部两行 + 槽位表 6 行 + 本配置设置 + 底部状态栏」决定。
+	fixedWinWidth  = 1140
+	fixedWinHeight = 630
 )
 
 // 槽位表列宽：集中定义，便于与 fixedWinWidth 联动调整。
 const (
-	colSlotName   = 62
-	colKey        = 68
-	colStrategy   = 88
-	colInterval   = 62
-	colDelay      = 56
-	colRandom     = 44
-	colRowSpacing = 6
+	colSlotName   = 130
+	colKey        = 140
+	colStrategy   = 220
+	colInterval   = 140
+	colDelay      = 130
+	colRandom     = 110
+	colRowSpacing = 8
 )
 
 // 延迟的界面取值范围：与协议校验保持一致，避免界面允许但保存时被拒。
