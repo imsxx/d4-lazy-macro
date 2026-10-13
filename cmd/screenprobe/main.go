@@ -33,6 +33,7 @@ func main() {
 	out := flag.String("out", "screen.png", "输出 PNG 路径")
 	backend := flag.String("backend", "auto", "截图后端：auto | desktop | window")
 	press := flag.String("press", "", "截图前先按下的键，逗号分隔（如 1,2,3,4）；仅当目标窗口位于前台时发送")
+	activate := flag.Bool("activate", false, "发送按键前临时把目标窗口切到前台、发完立刻还原（标定专用；正式程序不抢焦点）")
 	settle := flag.Int("settle", 250, "按下按键后、截图前等待的毫秒数")
 	delay := flag.Int("delay", 0, "开始前等待的秒数（留时间切回游戏窗口）")
 	x := flag.Int("x", 0, "区域左上角屏幕坐标 X（仅 -process 留空时有效）")
@@ -64,7 +65,7 @@ func main() {
 	report(target)
 
 	if *press != "" {
-		if err := pressKeys(*press, target); err != nil {
+		if err := pressKeys(*press, target, *activate); err != nil {
 			die("%v", err)
 		}
 		fmt.Printf("已按下 %s，等待 %dms 后截图…\n", *press, *settle)
@@ -418,13 +419,31 @@ func report(t target) {
 }
 
 // pressKeys 在发送按键前强制校验前台窗口，避免把技能键打进别的程序。
-func pressKeys(list string, t target) error {
+// activate 为真时允许临时接管焦点（标定专用）：切到目标窗口、发完立刻还原。
+func pressKeys(list string, t target, activate bool) error {
 	if t.byScreen {
 		return fmt.Errorf("-press 需要配合 -process 使用")
 	}
 	if !win32.IsForeground(t.hwnd) {
-		return fmt.Errorf("目标窗口不在前台，拒绝发送按键（否则会打进当前前台程序）。" +
-			"请切回游戏再跑，或用 -delay 留出切窗口的时间")
+		if !activate {
+			return fmt.Errorf("目标窗口不在前台，拒绝发送按键（否则会打进当前前台程序）。" +
+				"请切回游戏再跑，或加 -activate 让探针临时接管焦点，或用 -delay 留出切窗口的时间")
+		}
+		prev := win32.ForegroundHandle()
+		if err := win32.ActivateWindow(t.hwnd); err != nil {
+			return err
+		}
+		time.Sleep(250 * time.Millisecond) // 等焦点真正切过去再发键
+		fmt.Println("已临时接管焦点（-activate）")
+		defer func() {
+			if prev != 0 && !win32.IsForeground(prev) {
+				if err := win32.ActivateWindow(prev); err != nil {
+					fmt.Printf("[提示] 还原原前台窗口失败：%v\n", err)
+					return
+				}
+				fmt.Println("已还原原前台窗口")
+			}
+		}()
 	}
 	for _, part := range splitList(list) {
 		vk, err := keys.Parse(part)

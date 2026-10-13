@@ -20,7 +20,60 @@ var (
 	procEnumWindows              = user32.NewProc("EnumWindows")
 	procIsWindowVisible          = user32.NewProc("IsWindowVisible")
 	procGetWindowRect            = user32.NewProc("GetWindowRect")
+	procSetForegroundWindow      = user32.NewProc("SetForegroundWindow")
+	procShowWindow               = user32.NewProc("ShowWindow")
+	procBringWindowToTop         = user32.NewProc("BringWindowToTop")
+	procAttachThreadInput        = user32.NewProc("AttachThreadInput")
+	procGetCurrentThreadId       = kernel32.NewProc("GetCurrentThreadId")
 )
+
+// swRestore 是 ShowWindow 的 SW_RESTORE：恢复被最小化的窗口而不改变其尺寸。
+const swRestore = 9
+
+// ForegroundHandle 返回当前前台窗口句柄（0 表示没有）。
+func ForegroundHandle() windows.Handle {
+	hwnd, _, _ := procGetForegroundWindow.Call()
+	return windows.Handle(hwnd)
+}
+
+// ActivateWindow 把指定窗口切到前台。
+//
+// 存在的意义：SendInput 只把输入送进前台窗口，所以标定期间要自动按键就必须先让游戏拿到焦点。
+// Windows 有「前台锁定」——后台进程不能随便抢焦点，直接调 SetForegroundWindow 常常失败，
+// 因此失败后改用 AttachThreadInput 把本线程的输入队列临时挂到目标线程上再抢一次。
+//
+// 注意：这是标定专用手段，正式程序不会调用它（正式程序只在游戏已位于前台时才发送）。
+func ActivateWindow(hwnd windows.Handle) error {
+	if hwnd == 0 {
+		return fmt.Errorf("窗口句柄无效")
+	}
+	if IsForeground(hwnd) {
+		return nil
+	}
+	// 最小化的窗口无法成为前台，先恢复（返回 0 只表示「它之前是隐藏的」，不是错误）。
+	_, _, _ = procShowWindow.Call(uintptr(hwnd), swRestore)
+
+	if ret, _, _ := procSetForegroundWindow.Call(uintptr(hwnd)); ret != 0 {
+		return nil
+	}
+
+	// 前台锁定：把当前线程的输入队列挂到目标窗口所属线程上，再抢一次。
+	targetTID, _, _ := procGetWindowThreadProcessId.Call(uintptr(hwnd), 0)
+	curTID, _, _ := procGetCurrentThreadId.Call()
+	if targetTID != 0 && curTID != 0 && targetTID != curTID {
+		if ret, _, _ := procAttachThreadInput.Call(curTID, targetTID, 1); ret != 0 {
+			defer procAttachThreadInput.Call(curTID, targetTID, 0)
+			_, _, _ = procBringWindowToTop.Call(uintptr(hwnd))
+			if ret, _, _ := procSetForegroundWindow.Call(uintptr(hwnd)); ret != 0 {
+				return nil
+			}
+		}
+	}
+	if IsForeground(hwnd) {
+		return nil
+	}
+	return fmt.Errorf("无法把目标窗口切到前台（被 Windows 前台锁定拒绝）")
+}
 
 // WindowRect 是窗口在屏幕上的绝对物理矩形。
 type WindowRect struct {
