@@ -966,9 +966,12 @@ func (a *app) startHelper(snap runtimeSnapshot) {
 	}()
 }
 
-// pickHelper 按当前界面状态挑选助手（对应 D3keyHelper 调度器的判定顺序）。
+// pickHelper 按当前界面状态挑选助手（顺序对应 D3keyHelper 的调度器）。
 func pickHelper(env *helper.Env, settings store.HelperSettings) (helper.Helper, error) {
 	at := env.Sampler()
+	if settings.IsEnabled("d3.gamble") && games.D3GambleOpen(at) {
+		return helper.D3Gamble{}, nil
+	}
 	if settings.IsEnabled("d3.kanai.reforge") &&
 		games.D3KanaiCubeOpen(env.Lang, at) == games.D3KanaiReforge {
 		return helper.D3Reforge{Target: settings.ReforgeTarget}, nil
@@ -978,7 +981,12 @@ func pickHelper(env *helper.Env, settings store.HelperSettings) (helper.Helper, 
 			return helper.D3QuickSalvage{}, nil
 		}
 	}
-	return nil, fmt.Errorf("当前界面没有可用的助手：请打开铁匠铺的分解页，或卡奈魔盒的重铸页")
+	// 拾取没有界面条件，放在最后兜底。
+	if settings.IsEnabled("d3.loot") {
+		return helper.D3Loot{}, nil
+	}
+	return nil, fmt.Errorf("当前界面没有可用的助手：请打开赌博界面、铁匠铺分解页或卡奈魔盒重铸页；" +
+		"若只想拾取，请启用「一键拾取」")
 }
 
 // quickPauseDoubleClickWindow 是双击判定的时间窗。
