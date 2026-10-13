@@ -181,3 +181,130 @@ func TestSendErrorsReported(t *testing.T) {
 		t.Fatalf("发送失败未被上报：%v", *errs)
 	}
 }
+
+func TestBuffCheckerSkipsWhenActive(t *testing.T) {
+	// 只有声明「保持Buff」策略（Buff: true）的规则才会调用 Buff 检测器。
+	e, sender, _, _ := newTestEngine(t, []config.ParsedRule{
+		{Kind: config.ActionTap, Keys: []uint16{0x31}, IntervalMS: 100, Buff: true},
+	})
+	e.SetEnabled(true)
+
+	buffActive := true
+	e.SetBuffChecker(func(vk uint16) bool {
+		return buffActive
+	})
+
+	// 初始 Tick：Buff 处于激活状态，应该跳过不发送
+	e.Tick(base, true)
+	expectEvents(t, sender)
+
+	// 150ms 后：Buff 仍然激活，继续跳过
+	e.Tick(base.Add(150*time.Millisecond), true)
+	expectEvents(t, sender)
+
+	// Buff 消失
+	buffActive = false
+	e.Tick(base.Add(300*time.Millisecond), true)
+	expectEvents(t, sender, "tap:1")
+}
+
+func TestTapRepeatBurst(t *testing.T) {
+	// 连点 3 次、重复间隔 50ms：一个周期内连发 3 次，随后回到周期节奏。
+	e, sender, _, _ := newTestEngine(t, []config.ParsedRule{
+		{Kind: config.ActionTap, Keys: []uint16{0x31}, IntervalMS: 300, Repeat: 3, RepeatInterval: 50},
+	})
+	e.SetEnabled(true)
+	e.Tick(base, true)
+	expectEvents(t, sender, "tap:1")
+	e.Tick(base.Add(50*time.Millisecond), true)
+	expectEvents(t, sender, "tap:1", "tap:1")
+	e.Tick(base.Add(100*time.Millisecond), true)
+	expectEvents(t, sender, "tap:1", "tap:1", "tap:1")
+	// 爆发结束后进入等待：周期终点为 100 + 300 = 400ms
+	e.Tick(base.Add(399*time.Millisecond), true)
+	expectEvents(t, sender, "tap:1", "tap:1", "tap:1")
+	e.Tick(base.Add(400*time.Millisecond), true)
+	expectEvents(t, sender, "tap:1", "tap:1", "tap:1", "tap:1")
+}
+
+func TestTapDelayPostponesWithinCycle(t *testing.T) {
+	// 正延迟：周期起点后等待 100ms 才发送。
+	e, sender, _, _ := newTestEngine(t, []config.ParsedRule{
+		{Kind: config.ActionTap, Keys: []uint16{0x31}, IntervalMS: 500, DelayMS: 100},
+	})
+	e.SetEnabled(true)
+	e.Tick(base, true)
+	expectEvents(t, sender)
+	e.Tick(base.Add(99*time.Millisecond), true)
+	expectEvents(t, sender)
+	e.Tick(base.Add(100*time.Millisecond), true)
+	expectEvents(t, sender, "tap:1")
+}
+
+func TestTapNegativeDelayShiftsToCycleEnd(t *testing.T) {
+	// 负延迟：推迟到周期末尾前 100ms（500 - 100 = 400ms 处）发送。
+	e, sender, _, _ := newTestEngine(t, []config.ParsedRule{
+		{Kind: config.ActionTap, Keys: []uint16{0x31}, IntervalMS: 500, DelayMS: -100},
+	})
+	e.SetEnabled(true)
+	e.Tick(base, true)
+	e.Tick(base.Add(399*time.Millisecond), true)
+	expectEvents(t, sender)
+	e.Tick(base.Add(400*time.Millisecond), true)
+	expectEvents(t, sender, "tap:1")
+}
+
+func TestTapDelayBelowThresholdIgnored(t *testing.T) {
+	// |延迟| 未超过 20ms 阈值视为关闭：周期起点立即发送。
+	e, sender, _, _ := newTestEngine(t, []config.ParsedRule{
+		{Kind: config.ActionTap, Keys: []uint16{0x31}, IntervalMS: 200, DelayMS: 20},
+	})
+	e.SetEnabled(true)
+	e.Tick(base, true)
+	expectEvents(t, sender, "tap:1")
+}
+
+func TestTapRandomDelayUsesInjectedSource(t *testing.T) {
+	e, sender, _, _ := newTestEngine(t, []config.ParsedRule{
+		{Kind: config.ActionTap, Keys: []uint16{0x31}, IntervalMS: 500, DelayMS: 100, RandomDelay: true},
+	})
+	// 固定随机源取上界：mag = 10 + (100-10+1) - 1 = 100
+	e.randIntn = func(n int) int { return n - 1 }
+	e.SetEnabled(true)
+	e.Tick(base, true)
+	expectEvents(t, sender)
+	e.Tick(base.Add(99*time.Millisecond), true)
+	expectEvents(t, sender)
+	e.Tick(base.Add(100*time.Millisecond), true)
+	expectEvents(t, sender, "tap:1")
+}
+
+func TestBuffPriorityYieldsToActiveHigherBuff(t *testing.T) {
+	// 两条保持Buff 规则：高优先级（技能1）的 Buff 仍在生效时，两条都让路；
+	// 高优先级 Buff 断开后，低优先级（技能2）才能补自己的 Buff。
+	e, sender, _, _ := newTestEngine(t, []config.ParsedRule{
+		{Kind: config.ActionTap, Keys: []uint16{0x31}, IntervalMS: 100, Buff: true, Priority: 5},
+		{Kind: config.ActionTap, Keys: []uint16{0x32}, IntervalMS: 100, Buff: true, Priority: 1},
+	})
+	active := map[uint16]bool{0x31: true, 0x32: false}
+	e.SetBuffChecker(func(vk uint16) bool { return active[vk] })
+	e.SetEnabled(true)
+
+	e.Tick(base, true)
+	expectEvents(t, sender)
+
+	active[0x31] = false
+	e.Tick(base.Add(150*time.Millisecond), true)
+	expectEvents(t, sender, "tap:1", "tap:2")
+}
+
+func TestBuffGuardOnlyAppliesToBuffRules(t *testing.T) {
+	// 普通连点规则（未声明保持Buff）不受 Buff 检测器影响。
+	e, sender, _, _ := newTestEngine(t, []config.ParsedRule{
+		{Kind: config.ActionTap, Keys: []uint16{0x31}, IntervalMS: 100},
+	})
+	e.SetBuffChecker(func(vk uint16) bool { return true })
+	e.SetEnabled(true)
+	e.Tick(base, true)
+	expectEvents(t, sender, "tap:1")
+}

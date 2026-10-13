@@ -6,8 +6,14 @@ import (
 	"testing"
 )
 
-// docExample 是 docs/share-code.md 中的示例码，必须始终可解析。
+// docExample 是 docs/share-code.md 中的示例码（v1）：必须始终可解析，用于守护向后兼容。
 const docExample = `DLM1:eyJ2IjoxLCJnIjoiZDQiLCJuIjoi5YWJ55-b5rOV5biILemAn-WItyIsImEiOiLmn5BCROS9nOiAhSIsInRnIjoiRjEiLCJwIjpbeyJuIjoi6YCf5Yi3IiwiciI6W3sidGciOiJ0IiwiYSI6InRhcDo0IiwiaSI6MjUwfSx7InRnIjoiaDpYMSIsImEiOiJzZXE6MiwzIiwiaSI6MjAwfSx7InRnIjoidCIsImEiOiJ0YXA6MyIsImkiOjMwMDAwfSx7InRnIjoidCIsImEiOiJob2xkOlJNQiJ9LHsidGciOiJoOlgyIiwiYSI6Im9uY2U6MSJ9XX1dfQ`
+
+// docExampleV2 是 docs/share-code.md 中的示例码（v2）：必须始终可解析。
+const docExampleV2 = `DLM2:eyJ2IjoyLCJnIjoiZDMiLCJuIjoi5pqX6buRMyDpgJ_liLciLCJhIjoi5p-QQkTkvZzogIUiLCJ0ZyI6IkYxIiwicCI6W3sibiI6IumAn-WItyIsInIiOlt7InRnIjoidCIsImEiOiJ0YXA6MiIsImkiOjMwMCwic3QiOjMsInByIjoxfSx7InRnIjoidCIsImEiOiJob2xkOlJNQiJ9LHsidGciOiJ0IiwiYSI6InRhcDoxIiwiaSI6MTUwLCJzdCI6MiwiZCI6LTQwLCJyZCI6dHJ1ZSwicnAiOjMsInJpIjo2MH1dfV19`
+
+// legacyPrefix 是 v1 前缀（仅测试使用）。
+const legacyPrefix = "DLM1:"
 
 func mustParse(t *testing.T, code string) *Parsed {
 	t.Helper()
@@ -49,10 +55,106 @@ func TestParseDocExample(t *testing.T) {
 	if rules[4].Kind != ActionOnce || rules[4].HoldVK != 0x06 || rules[4].Keys[0] != 0x31 {
 		t.Fatalf("规则 5 解析错误：%+v", rules[4])
 	}
+	// v1 码没有策略声明：全部为「未声明」，且不触发 Buff 守卫。
+	for i, r := range rules {
+		if r.Strategy != StrategyDisabled || r.Buff || r.DelayMS != 0 || r.Repeat != 0 || r.Priority != 0 {
+			t.Fatalf("规则 %d 不应携带 v2 调参：%+v", i+1, r)
+		}
+	}
+}
+
+func TestV1CodeReencodesAsCurrentVersion(t *testing.T) {
+	raw, _, err := Decode(docExample)
+	if err != nil {
+		t.Fatalf("v1 旧码应当可解析：%v", err)
+	}
+	if raw.Version != 1 {
+		t.Fatalf("原始形态版本应保持 1，实际 %d", raw.Version)
+	}
+	raw.Version = Version // 重新导出时升级为当前版本
+	code, err := Encode(*raw)
+	if err != nil {
+		t.Fatalf("升级导出失败：%v", err)
+	}
+	if !strings.HasPrefix(code, Prefix) {
+		t.Fatalf("升级导出应使用当前前缀：%s", code)
+	}
+	if len(mustParse(t, code).Profiles[0].Rules) != 5 {
+		t.Fatalf("升级后的码应保持规则数量")
+	}
+}
+
+func TestUpgradeLegacyFillsStrategies(t *testing.T) {
+	raw := Raw{Version: 1, Profiles: []RawProfile{{Rules: []RawRule{
+		{Trigger: "t", Action: "hold:RMB"},
+		{Trigger: "t", Action: "tap:2", IntervalMS: 300},
+		{Trigger: "t", Action: "tap:1", IntervalMS: 150},
+		{Trigger: "t", Action: "seq:1,2", IntervalMS: 200},
+	}}}}
+	UpgradeLegacy(&raw)
+
+	if raw.Version != Version {
+		t.Fatalf("迁移后版本应为 %d，实际 %d", Version, raw.Version)
+	}
+	rules := raw.Profiles[0].Rules
+	if rules[0].Strategy != StrategyHold {
+		t.Errorf("按住不放应回填策略 1，实际 %d", rules[0].Strategy)
+	}
+	if rules[1].Strategy != StrategyBuff {
+		t.Errorf("tap+300ms 应回填保持Buff，实际 %d", rules[1].Strategy)
+	}
+	if rules[2].Strategy != StrategySpam {
+		t.Errorf("普通连点应回填策略 2，实际 %d", rules[2].Strategy)
+	}
+	if rules[3].Strategy != StrategyDisabled {
+		t.Errorf("序列不应被声明策略，实际 %d", rules[3].Strategy)
+	}
+
+	// 迁移结果必须能通过校验，且保持Buff 的屏幕守卫标记已生效。
+	parsed, err := Resolve(raw)
+	if err != nil {
+		t.Fatalf("迁移后的配置应合法：%v", err)
+	}
+	if !parsed.Profiles[0].Rules[1].Buff {
+		t.Fatalf("迁移后保持Buff 规则应带守卫标记：%+v", parsed.Profiles[0].Rules[1])
+	}
+}
+
+func TestUpgradeLegacyIsIdempotent(t *testing.T) {
+	// 已声明策略的规则不会被改写，当前版本的配置原样通过。
+	raw := Raw{Version: Version, Profiles: []RawProfile{{Rules: []RawRule{
+		{Trigger: "t", Action: "tap:2", IntervalMS: 300, Strategy: StrategySpam},
+	}}}}
+	UpgradeLegacy(&raw)
+	if raw.Profiles[0].Rules[0].Strategy != StrategySpam {
+		t.Fatalf("已声明策略被改写：%d", raw.Profiles[0].Rules[0].Strategy)
+	}
+}
+
+func TestParseDocExampleV2(t *testing.T) {
+	p := mustParse(t, docExampleV2)
+	if p.Game != "d3" || p.ToggleVK != 0x70 {
+		t.Fatalf("v2 示例基础字段解析错误：%+v", p)
+	}
+	rules := p.Profiles[0].Rules
+	if len(rules) != 3 {
+		t.Fatalf("v2 示例规则数量错误：%d", len(rules))
+	}
+	if !rules[0].Buff || rules[0].Strategy != StrategyBuff || rules[0].Priority != 1 {
+		t.Fatalf("v2 示例保持Buff 规则解析错误：%+v", rules[0])
+	}
+	if rules[1].Kind != ActionHold || rules[1].Strategy != StrategyDisabled {
+		t.Fatalf("v2 示例按住规则解析错误：%+v", rules[1])
+	}
+	spam := rules[2]
+	if spam.Strategy != StrategySpam || spam.DelayMS != -40 || !spam.RandomDelay ||
+		spam.Repeat != 3 || spam.RepeatInterval != 60 {
+		t.Fatalf("v2 示例连点调参解析错误：%+v", spam)
+	}
 }
 
 func TestParseToleratesWhitespacePrefixCaseAndPadding(t *testing.T) {
-	payload := strings.TrimPrefix(docExample, Prefix)
+	payload := strings.TrimPrefix(docExample, legacyPrefix)
 	messy := "dlm1:" + payload[:20] + "\n\t " + payload[20:] + "=="
 	p := mustParse(t, messy)
 	if len(p.Profiles) != 1 || len(p.Profiles[0].Rules) != 5 {
@@ -64,32 +166,38 @@ func codeFromJSON(js string) string {
 	return Prefix + base64.RawURLEncoding.EncodeToString([]byte(js))
 }
 
+func legacyCodeFromJSON(js string) string {
+	return legacyPrefix + base64.RawURLEncoding.EncodeToString([]byte(js))
+}
+
 func TestParseRejectsInvalid(t *testing.T) {
 	valid := `{"tg":"t","a":"tap:1","i":100}`
 	nine := strings.TrimSuffix(strings.Repeat(valid+",", 9), ",")
 	cases := map[string]string{
-		"空码":       "",
-		"前缀错误":     "D4LM2:" + strings.TrimPrefix(docExample, Prefix),
+		"空码":        "",
+		"前缀错误":      "D4LM2:" + strings.TrimPrefix(docExample, legacyPrefix),
+		"前缀版本非数字":   "DLMX:" + strings.TrimPrefix(docExample, legacyPrefix),
+		"版本超出支持":    "DLM9:" + base64.RawURLEncoding.EncodeToString([]byte(`{"v":9,"p":[{"r":[`+valid+`]}]}`)),
+		"前缀与正文版本不一致": legacyCodeFromJSON(`{"v":2,"p":[{"r":[` + valid + `]}]}`),
 		"非 Base64": Prefix + "不是base64!!",
-		"版本不符":     codeFromJSON(`{"v":2,"p":[{"r":[` + valid + `]}]}`),
-		"游戏标识非法":   codeFromJSON(`{"v":1,"g":"d5","p":[{"r":[` + valid + `]}]}`),
-		"未知字段":     codeFromJSON(`{"v":1,"x":1,"p":[{"r":[` + valid + `]}]}`),
-		"没有方案":     codeFromJSON(`{"v":1,"p":[]}`),
-		"方案没有规则":   codeFromJSON(`{"v":1,"p":[{"r":[]}]}`),
-		"规则过多":     codeFromJSON(`{"v":1,"p":[{"r":[` + nine + `]}]}`),
-		"间隔过小":     codeFromJSON(`{"v":1,"p":[{"r":[{"tg":"t","a":"tap:1","i":5}]}]}`),
-		"间隔缺失":     codeFromJSON(`{"v":1,"p":[{"r":[{"tg":"t","a":"tap:1"}]}]}`),
-		"单点带间隔":    codeFromJSON(`{"v":1,"p":[{"r":[{"tg":"t","a":"once:1","i":100}]}]}`),
-		"按键名非法":    codeFromJSON(`{"v":1,"p":[{"r":[{"tg":"t","a":"tap:ZZ","i":100}]}]}`),
-		"序列过长":     codeFromJSON(`{"v":1,"p":[{"r":[{"tg":"t","a":"seq:1,2,3,4,5,6,7","i":100}]}]}`),
-		"触发方式非法":   codeFromJSON(`{"v":1,"p":[{"r":[{"tg":"x","a":"tap:1","i":100}]}]}`),
-		"触发键非法":    codeFromJSON(`{"v":1,"p":[{"r":[{"tg":"h:??","a":"tap:1","i":100}]}]}`),
-		"启停键用鼠标":   codeFromJSON(`{"v":1,"tg":"LMB","p":[{"r":[` + valid + `]}]}`),
-		"切换键用鼠标":   codeFromJSON(`{"v":1,"p":[{"r":[` + valid + `],"hk":"X1"}]}`),
-		"切换键非法":    codeFromJSON(`{"v":1,"p":[{"r":[` + valid + `],"hk":"??"}]}`),
-		"名称过长":     codeFromJSON(`{"v":1,"n":"` + strings.Repeat("长", 25) + `","p":[{"r":[` + valid + `]}]}`),
-		"JSON 有尾巴": codeFromJSON(`{"v":1,"p":[{"r":[` + valid + `]}]}{}`),
-		"JSON 未闭合": codeFromJSON(`{"v":1,"p":[{"r":[` + valid),
+		"游戏标识非法":   codeFromJSON(`{"v":2,"g":"d5","p":[{"r":[` + valid + `]}]}`),
+		"未知字段":     codeFromJSON(`{"v":2,"x":1,"p":[{"r":[` + valid + `]}]}`),
+		"没有方案":     codeFromJSON(`{"v":2,"p":[]}`),
+		"方案没有规则":   codeFromJSON(`{"v":2,"p":[{"r":[]}]}`),
+		"规则过多":     codeFromJSON(`{"v":2,"p":[{"r":[` + nine + `]}]}`),
+		"间隔过小":     codeFromJSON(`{"v":2,"p":[{"r":[{"tg":"t","a":"tap:1","i":5}]}]}`),
+		"间隔缺失":     codeFromJSON(`{"v":2,"p":[{"r":[{"tg":"t","a":"tap:1"}]}]}`),
+		"单点带间隔":    codeFromJSON(`{"v":2,"p":[{"r":[{"tg":"t","a":"once:1","i":100}]}]}`),
+		"按键名非法":    codeFromJSON(`{"v":2,"p":[{"r":[{"tg":"t","a":"tap:ZZ","i":100}]}]}`),
+		"序列过长":     codeFromJSON(`{"v":2,"p":[{"r":[{"tg":"t","a":"seq:1,2,3,4,5,6,7","i":100}]}]}`),
+		"触发方式非法":   codeFromJSON(`{"v":2,"p":[{"r":[{"tg":"x","a":"tap:1","i":100}]}]}`),
+		"触发键非法":    codeFromJSON(`{"v":2,"p":[{"r":[{"tg":"h:??","a":"tap:1","i":100}]}]}`),
+		"启停键用鼠标":   codeFromJSON(`{"v":2,"tg":"LMB","p":[{"r":[` + valid + `]}]}`),
+		"切换键用鼠标":   codeFromJSON(`{"v":2,"p":[{"r":[` + valid + `],"hk":"X1"}]}`),
+		"切换键非法":    codeFromJSON(`{"v":2,"p":[{"r":[` + valid + `],"hk":"??"}]}`),
+		"名称过长":     codeFromJSON(`{"v":2,"n":"` + strings.Repeat("长", 25) + `","p":[{"r":[` + valid + `]}]}`),
+		"JSON 有尾巴":  codeFromJSON(`{"v":2,"p":[{"r":[` + valid + `]}]}{}`),
+		"JSON 未闭合":  codeFromJSON(`{"v":2,"p":[{"r":[` + valid),
 	}
 	for name, code := range cases {
 		if _, err := Parse(code); err == nil {
@@ -98,9 +206,61 @@ func TestParseRejectsInvalid(t *testing.T) {
 	}
 }
 
+func TestParseV2TuningFields(t *testing.T) {
+	js := `{"v":2,"p":[{"r":[` +
+		`{"tg":"t","a":"tap:2","i":300,"st":3,"pr":5},` +
+		`{"tg":"t","a":"tap:1","i":1000,"st":2,"d":-40,"rd":true,"rp":3,"ri":60},` +
+		`{"tg":"t","a":"hold:RMB","st":1}]}]}`
+	p := mustParse(t, codeFromJSON(js))
+	rules := p.Profiles[0].Rules
+
+	if rules[0].Strategy != StrategyBuff || !rules[0].Buff || rules[0].Priority != 5 {
+		t.Fatalf("保持Buff 规则解析错误：%+v", rules[0])
+	}
+	if rules[1].Strategy != StrategySpam || rules[1].Buff {
+		t.Fatalf("连点策略解析错误：%+v", rules[1])
+	}
+	if rules[1].DelayMS != -40 || !rules[1].RandomDelay {
+		t.Fatalf("延迟与延迟随机解析错误：%+v", rules[1])
+	}
+	if rules[1].Repeat != 3 || rules[1].RepeatInterval != 60 {
+		t.Fatalf("重复次数/间隔解析错误：%+v", rules[1])
+	}
+	if rules[2].Strategy != StrategyHold || rules[2].Kind != ActionHold {
+		t.Fatalf("按住不放策略解析错误：%+v", rules[2])
+	}
+}
+
+func TestParseRejectsInvalidTuning(t *testing.T) {
+	cases := map[string]string{
+		"延迟超上限":   `{"tg":"t","a":"tap:1","i":100,"d":30001}`,
+		"延迟超下限":   `{"tg":"t","a":"tap:1","i":100,"d":-30001}`,
+		"随机但无延迟":  `{"tg":"t","a":"tap:1","i":100,"rd":true}`,
+		"延迟用于序列":  `{"tg":"t","a":"seq:1,2","i":100,"d":50}`,
+		"延迟用于按住":  `{"tg":"t","a":"hold:RMB","d":50}`,
+		"重复次数为 1": `{"tg":"t","a":"tap:1","i":100,"rp":1,"ri":100}`,
+		"重复次数超上限": `{"tg":"t","a":"tap:1","i":100,"rp":21,"ri":100}`,
+		"重复间隔缺失":  `{"tg":"t","a":"tap:1","i":100,"rp":3}`,
+		"重复间隔却无次数": `{"tg":"t","a":"tap:1","i":100,"ri":100}`,
+		"重复间隔过小":  `{"tg":"t","a":"tap:1","i":100,"rp":3,"ri":5}`,
+		"重复用于按住":  `{"tg":"t","a":"hold:RMB","rp":3,"ri":100}`,
+		"优先级超上限":  `{"tg":"t","a":"tap:1","i":100,"st":3,"pr":7}`,
+		"优先级非保持Buff": `{"tg":"t","a":"tap:1","i":100,"st":2,"pr":3}`,
+		"策略超范围":   `{"tg":"t","a":"tap:1","i":100,"st":9}`,
+		"策略与动作不符": `{"tg":"t","a":"tap:1","i":100,"st":1}`,
+		"保持Buff带重复": `{"tg":"t","a":"tap:1","i":100,"st":3,"rp":2,"ri":50}`,
+	}
+	for name, rule := range cases {
+		code := codeFromJSON(`{"v":2,"p":[{"r":[` + rule + `]}]}`)
+		if _, err := Parse(code); err == nil {
+			t.Errorf("%s：应当报错但没有", name)
+		}
+	}
+}
+
 func TestEncodeRoundTrip(t *testing.T) {
 	raw := Raw{
-		Version: 1,
+		Version: Version,
 		Name:    "测试配置",
 		Author:  "作者",
 		Toggle:  "F8",
@@ -109,6 +269,8 @@ func TestEncodeRoundTrip(t *testing.T) {
 				{Trigger: "t", Action: "tap:4", IntervalMS: 250},
 				{Trigger: "h:X1", Action: "seq:2,3", IntervalMS: 200},
 				{Trigger: "t", Action: "hold:RMB"},
+				{Trigger: "t", Action: "tap:2", IntervalMS: 300, Strategy: StrategyBuff, Priority: 4},
+				{Trigger: "t", Action: "tap:1", IntervalMS: 1000, Strategy: StrategySpam, DelayMS: 100, Repeat: 2, RepeatInterval: 50},
 			}},
 		},
 	}
@@ -117,7 +279,7 @@ func TestEncodeRoundTrip(t *testing.T) {
 		t.Fatalf("Encode 失败：%v", err)
 	}
 	if !strings.HasPrefix(code, Prefix) {
-		t.Fatalf("编码结果缺少前缀：%s", code)
+		t.Fatalf("编码结果缺少当前前缀：%s", code)
 	}
 	p := mustParse(t, code)
 	if p.ToggleVK != 0x77 || p.Name != "测试配置" {
@@ -130,10 +292,16 @@ func TestEncodeRoundTrip(t *testing.T) {
 	if last.Kind != ActionHold || last.Keys[0] != 0x02 {
 		t.Fatalf("回读动作解析错误：%+v", last)
 	}
+	if buff := p.Profiles[0].Rules[3]; !buff.Buff || buff.Priority != 4 {
+		t.Fatalf("回读保持Buff 调参错误：%+v", buff)
+	}
+	if spam := p.Profiles[0].Rules[4]; spam.DelayMS != 100 || spam.Repeat != 2 || spam.RepeatInterval != 50 {
+		t.Fatalf("回读连点调参错误：%+v", spam)
+	}
 }
 
 func TestEncodeRejectsInvalid(t *testing.T) {
-	bad := Raw{Version: 1, Profiles: []RawProfile{{Rules: []RawRule{
+	bad := Raw{Version: Version, Profiles: []RawProfile{{Rules: []RawRule{
 		{Trigger: "t", Action: "tap:1", IntervalMS: 5},
 	}}}}
 	if _, err := Encode(bad); err == nil {

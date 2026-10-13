@@ -89,7 +89,7 @@ func keyNameOfToken(token string) string {
 
 // keySequenceNames 把 "2,3" 这样的序列转成中文名串。
 func keySequenceNames(arg string) string {
-	names := make([]string, 0, maxSeqKeys)
+	names := make([]string, 0, 6)
 	for _, p := range strings.Split(arg, ",") {
 		if strings.TrimSpace(p) == "" {
 			continue

@@ -1,5 +1,6 @@
-// Package config 实现分享码协议 v1 的解析、编码与校验（契约文档：docs/share-code.md）。
+// Package config 实现分享码协议 v2 的解析、编码与校验（契约文档：docs/share-code.md）。
 // 解析必须 Fail Fast：任何不合法输入整段拒绝，禁止部分应用或静默降级。
+// 向后兼容：仍可解析 v1 分享码（旧码导入后按当前版本重新导出）。
 package config
 
 import (
@@ -16,10 +17,12 @@ import (
 )
 
 const (
-	// Prefix 是分享码前缀，字母大小写不敏感；其后为 base64url 编码的紧凑 JSON。
-	Prefix = "DLM1:"
+	// Prefix 是当前版本分享码前缀，字母大小写不敏感；其后为 base64url 编码的紧凑 JSON。
+	Prefix = "DLM2:"
 	// Version 是当前协议版本。
-	Version = 1
+	Version = 2
+	// MinVersion 是仍可解析的最旧协议版本（旧分享码与旧存档可继续使用）。
+	MinVersion = 1
 
 	maxCodeChars       = 4096
 	maxDecodedBytes    = 3000
@@ -29,6 +32,20 @@ const (
 	maxSequenceKeys    = 6
 	minIntervalMS      = 20
 	maxIntervalMS      = 600000
+	// maxDelayMS 是「延迟」的绝对值上限（正数延后、负数提前）。
+	maxDelayMS = 30000
+	// maxRepeatCount 是连点重复次数上限。
+	maxRepeatCount = 20
+	// maxPriority 是保持Buff 的优先级上限。
+	maxPriority = 6
+)
+
+// 槽位释放策略取值。协议中可显式声明（st 字段），未声明（0）时由动作类型推断。
+const (
+	StrategyDisabled = 0 // 禁用：不自动触发
+	StrategyHold     = 1 // 按住不放
+	StrategySpam     = 2 // 连点
+	StrategyBuff     = 3 // 保持Buff（需要屏幕守卫）
 )
 
 // ActionKind 是规则动作类型。
@@ -60,9 +77,15 @@ type RawProfile struct {
 
 // RawRule 是单条规则的 JSON 形态。
 type RawRule struct {
-	Trigger    string `json:"tg"`
-	Action     string `json:"a"`
-	IntervalMS int    `json:"i,omitempty"`
+	Trigger        string `json:"tg"`
+	Action         string `json:"a"`
+	IntervalMS     int    `json:"i,omitempty"`
+	Strategy       int    `json:"st,omitempty"` // 释放策略：0 未声明 1 按住不放 2 连点 3 保持Buff
+	DelayMS        int    `json:"d,omitempty"`  // 延迟毫秒：正数延后、负数提前，0 关闭
+	RandomDelay    bool   `json:"rd,omitempty"` // 延迟随机：实际延迟取 0～|延迟| 之间的随机值
+	Repeat         int    `json:"rp,omitempty"` // 连点重复次数（≥2 生效）
+	RepeatInterval int    `json:"ri,omitempty"` // 重复之间的间隔毫秒
+	Priority       int    `json:"pr,omitempty"` // 保持Buff 优先级：越大越优先
 }
 
 // Parsed 是校验并解析后的可执行形式。
@@ -83,10 +106,17 @@ type ParsedProfile struct {
 
 // ParsedRule 是解析后的规则；HoldVK == 0 表示宏开启期间持续触发，否则为按住触发键。
 type ParsedRule struct {
-	HoldVK     uint16
-	Kind       ActionKind
-	Keys       []uint16
-	IntervalMS int
+	HoldVK         uint16
+	Kind           ActionKind
+	Keys           []uint16
+	IntervalMS     int
+	Strategy       int  // 释放策略（0 表示未声明）
+	Buff           bool // 是否需要屏幕 Buff 守卫（策略为保持Buff）
+	DelayMS        int  // 延迟：正数延后、负数提前
+	RandomDelay    bool // 延迟随机
+	Repeat         int  // 连点重复次数（0/1 表示单次）
+	RepeatInterval int  // 重复之间的间隔毫秒
+	Priority       int  // 保持Buff 优先级
 }
 
 // Decode 解析分享码，同时返回原始形态（用于持久化与再导出）与可执行形式。
@@ -134,11 +164,11 @@ func decode(code string) (*Raw, error) {
 	if len(code) > maxCodeChars {
 		return nil, fmt.Errorf("分享码过长（%d 字符，上限 %d）", len(code), maxCodeChars)
 	}
-	idx := strings.IndexByte(code, ':')
-	if idx < 0 || !strings.EqualFold(code[:idx], strings.TrimSuffix(Prefix, ":")) {
-		return nil, fmt.Errorf("分享码必须以 %s 开头", Prefix)
+	payload, prefixVersion, err := splitPrefix(code)
+	if err != nil {
+		return nil, err
 	}
-	payload := stripSpace(code[idx+1:])
+	payload = stripSpace(payload)
 	if payload == "" {
 		return nil, fmt.Errorf("分享码正文为空")
 	}
@@ -161,7 +191,28 @@ func decode(code string) (*Raw, error) {
 	if _, err := dec.Token(); err != io.EOF {
 		return nil, fmt.Errorf("分享码 JSON 末尾存在多余内容")
 	}
+	if raw.Version != prefixVersion {
+		return nil, fmt.Errorf("分享码前缀声明版本 %d，正文却是 %d，可能已被改动", prefixVersion, raw.Version)
+	}
 	return &raw, nil
+}
+
+// splitPrefix 解析 "DLM<n>:" 前缀，返回正文与其声明的版本号。
+// 支持解析 v1 旧码；版本超出支持范围时拒绝并提示升级。
+func splitPrefix(code string) (payload string, version int, err error) {
+	idx := strings.IndexByte(code, ':')
+	if idx < 0 {
+		return "", 0, fmt.Errorf("分享码必须以 %s 开头", Prefix)
+	}
+	tag := strings.ToUpper(strings.TrimSpace(code[:idx]))
+	if len(tag) != 4 || !strings.HasPrefix(tag, "DLM") || tag[3] < '0' || tag[3] > '9' {
+		return "", 0, fmt.Errorf("分享码必须以 %s 开头", Prefix)
+	}
+	version = int(tag[3] - '0')
+	if version < MinVersion || version > Version {
+		return "", 0, fmt.Errorf("分享码协议版本为 %d，本工具支持 %d–%d（请升级工具）", version, MinVersion, Version)
+	}
+	return code[idx+1:], version, nil
 }
 
 func stripSpace(s string) string {
@@ -175,8 +226,8 @@ func stripSpace(s string) string {
 }
 
 func resolve(raw *Raw) (*Parsed, error) {
-	if raw.Version != Version {
-		return nil, fmt.Errorf("分享码版本为 %d，本工具只支持版本 %d（请升级工具）", raw.Version, Version)
+	if raw.Version < MinVersion || raw.Version > Version {
+		return nil, fmt.Errorf("分享码版本为 %d，本工具支持 %d–%d（请升级工具）", raw.Version, MinVersion, Version)
 	}
 	if raw.Game != "" {
 		if _, ok := games.Lookup(raw.Game); !ok {
@@ -304,7 +355,116 @@ func resolveRule(profileNo, ruleNo int, r RawRule) (*ParsedRule, error) {
 			return nil, fmt.Errorf("%s 的动作 %s 不接受间隔字段（i）", where, rule.Kind)
 		}
 	}
+
+	if err := resolveRuleTuning(where, r, rule); err != nil {
+		return nil, err
+	}
 	return rule, nil
+}
+
+// InferStrategy 按动作类型与间隔推断释放策略。
+// 仅用于 v1 旧数据迁移（v1 没有策略字段）：tap + 300ms 是历史约定中的「保持Buff」。
+// 序列与单点没有对应的界面策略，返回未声明，避免改写其原有语义。
+func InferStrategy(kind ActionKind, intervalMS int) int {
+	switch kind {
+	case ActionHold:
+		return StrategyHold
+	case ActionTap:
+		if intervalMS == 300 {
+			return StrategyBuff
+		}
+		return StrategySpam
+	default:
+		return StrategyDisabled
+	}
+}
+
+// UpgradeLegacy 把旧版原始配置就地升级到当前协议版本：
+// 回填缺失的释放策略（v1 缺少该字段），并把版本号提升为当前版本。
+// 已声明策略的规则不会被改写（幂等）；当前版本的配置直接返回。
+func UpgradeLegacy(r *Raw) {
+	if r == nil || r.Version >= Version {
+		return
+	}
+	for pi := range r.Profiles {
+		for ri := range r.Profiles[pi].Rules {
+			rule := &r.Profiles[pi].Rules[ri]
+			if rule.Strategy != StrategyDisabled {
+				continue
+			}
+			kind, _, _ := strings.Cut(rule.Action, ":")
+			rule.Strategy = InferStrategy(ActionKind(strings.ToLower(strings.TrimSpace(kind))), rule.IntervalMS)
+		}
+	}
+	r.Version = Version
+}
+
+// resolveRuleTuning 校验并写入 v2 新增的调参字段（延迟、重复、优先级、策略）。
+func resolveRuleTuning(where string, r RawRule, rule *ParsedRule) error {
+	// 延迟（d / rd）：只对连点有意义——序列尚无偏移语义，静默忽略会误导使用者。
+	if r.DelayMS != 0 || r.RandomDelay {
+		if rule.Kind != ActionTap {
+			return fmt.Errorf("%s 的动作 %s 不接受延迟字段（d/rd）", where, rule.Kind)
+		}
+	}
+	if r.DelayMS < -maxDelayMS || r.DelayMS > maxDelayMS {
+		return fmt.Errorf("%s 的延迟必须在 -%d–%d 毫秒之间，实际 %d", where, maxDelayMS, maxDelayMS, r.DelayMS)
+	}
+	if r.RandomDelay && r.DelayMS == 0 {
+		return fmt.Errorf("%s 勾选了延迟随机但没有设置延迟", where)
+	}
+	rule.DelayMS = r.DelayMS
+	rule.RandomDelay = r.RandomDelay
+
+	// 重复连点（rp / ri）：仅连点支持，次数与间隔必须成对出现。
+	if r.Repeat != 0 && (r.Repeat < 2 || r.Repeat > maxRepeatCount) {
+		return fmt.Errorf("%s 的重复次数必须在 2–%d 之间（1 即不重复），实际 %d", where, maxRepeatCount, r.Repeat)
+	}
+	if r.Repeat != 0 && rule.Kind != ActionTap {
+		return fmt.Errorf("%s 只有连点动作支持重复次数（rp）", where)
+	}
+	if r.Repeat == 0 && r.RepeatInterval != 0 {
+		return fmt.Errorf("%s 设置了重复间隔（ri）但没有设置重复次数（rp）", where)
+	}
+	if r.Repeat > 0 {
+		if r.RepeatInterval < minIntervalMS || r.RepeatInterval > maxIntervalMS {
+			return fmt.Errorf("%s 的重复间隔必须在 %d–%d 毫秒之间，实际 %d", where, minIntervalMS, maxIntervalMS, r.RepeatInterval)
+		}
+		rule.Repeat = r.Repeat
+		rule.RepeatInterval = r.RepeatInterval
+	}
+
+	// 优先级（pr）：只对保持Buff 有仲裁意义。
+	if r.Priority < 0 || r.Priority > maxPriority {
+		return fmt.Errorf("%s 的优先级必须在 0–%d 之间，实际 %d", where, maxPriority, r.Priority)
+	}
+	if r.Priority != 0 && r.Strategy != StrategyBuff {
+		return fmt.Errorf("%s 设置了优先级（pr）但策略不是「保持Buff」", where)
+	}
+	rule.Priority = r.Priority
+
+	// 策略（st，可选）：显式声明时必须与动作类型相容。
+	if r.Strategy < 0 || r.Strategy > StrategyBuff {
+		return fmt.Errorf("%s 的策略取值 %d 无效（0–%d）", where, r.Strategy, StrategyBuff)
+	}
+	rule.Strategy = r.Strategy
+	switch r.Strategy {
+	case StrategyDisabled:
+	case StrategyHold:
+		if rule.Kind != ActionHold {
+			return fmt.Errorf("%s 声明策略为「按住不放」，动作必须是 hold:<键>", where)
+		}
+	case StrategySpam:
+		if rule.Kind != ActionTap {
+			return fmt.Errorf("%s 声明策略为「连点」，动作必须是 tap:<键>", where)
+		}
+	case StrategyBuff:
+		if rule.Kind != ActionTap || rule.Repeat > 0 {
+			return fmt.Errorf("%s 声明策略为「保持Buff」，要求动作是 tap:<键> 且不设置重复次数", where)
+		}
+		rule.Buff = true
+	}
+	return nil
 }
 
 func checkName(field, name string) error {

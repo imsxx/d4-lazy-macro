@@ -9,172 +9,291 @@ import (
 
 	"github.com/imsxx/diablo-lazy-macro/internal/config"
 	"github.com/imsxx/diablo-lazy-macro/internal/games"
+	"github.com/imsxx/diablo-lazy-macro/internal/keys"
 
 	"github.com/lxn/walk"
 	decl "github.com/lxn/walk/declarative"
+	"github.com/lxn/win"
 )
 
 const (
-	maxProfiles  = 4
-	maxRules     = 8
-	maxSeqKeys   = 4 // 界面提供 4 个序列下拉；协议上限 6，取更严的一侧
-	maxNameRunes = 24
+	maxProfiles = 4
+	numSlots    = 6
+
+	fixedWinWidth  = 860
+	fixedWinHeight = 540
 )
 
-var (
-	triggerItems = []string{"宏开启期间持续", "按住指定键"}
-	actionItems  = []string{"连点", "按键序列", "单点一次", "按住不放"}
-	actionCodes  = []string{"tap", "seq", "once", "hold"}
-	actionSeqIdx = 1 // actionItems / actionCodes 中「按键序列」的下标
+// 槽位释放策略取值，顺序与 strategyNames 一一对应；取值以协议常量 config.Strategy* 为准。
+const (
+	strategyDisabled = config.StrategyDisabled // 禁用：不自动触发
+	strategyHold     = config.StrategyHold     // 按住不放：战斗中持续按下（引导类技能）
+	strategySpam     = config.StrategySpam     // 连点：按间隔持续点击
+	strategyBuff     = config.StrategyBuff     // 保持Buff：屏幕守卫检测或定时续航
 )
 
-// mainWindow 是程序主窗口：游戏与方案切换、宏开关、规则编辑、导入导出与日志入口。
-// 关闭窗口只最小化到托盘，宏继续运行；所有控件仅在 UI 线程访问。
+var strategyNames = []string{
+	"禁用",
+	"按住不放",
+	"连点",
+	"保持Buff",
+}
+
+var startModeNames = []string{
+	"懒人模式 (开关切换)",
+	"仅按下时 (按住生效)",
+}
+
+type skillSlotData struct {
+	Name       string
+	DefaultKey string
+	Key        string
+	Strategy   int // 0:禁用, 1:按住不放, 2:连点, 3:保持Buff
+	IntervalMS int
+}
+
+// defaultSlots 按游戏适配器给出的槽位定义构造初始槽位（默认策略为禁用、间隔 250ms）。
+func defaultSlots() [numSlots]skillSlotData {
+	var out [numSlots]skillSlotData
+	defs := games.DefaultAdapter().Slots()
+	for i := 0; i < numSlots && i < len(defs); i++ {
+		out[i] = skillSlotData{
+			Name:       defs[i].Name,
+			DefaultKey: defs[i].DefaultKey,
+			Key:        defs[i].DefaultKey,
+			IntervalMS: 250,
+		}
+	}
+	return out
+}
+
+// mainWindow 是程序主窗口：左右双栏仪表盘架构（左栏方案与技能、右栏全局总控与状态、底栏激活状态）。
 type mainWindow struct {
 	app *app
 	mw  *walk.MainWindow
 
-	gameCombo    *walk.ComboBox
-	profileCombo *walk.ComboBox
-	statusLabel  *walk.Label
-	toggleBtn    *walk.PushButton
+	// 右栏全局控制与状态
+	gameCombo      *walk.ComboBox
+	toggleKeyBtn   *walk.PushButton
+	startModeCombo *walk.ComboBox
+	statusLabel    *walk.Label
+	targetProcLbl  *walk.Label
+	activeProfLbl  *walk.Label
 
-	nameEdit    *walk.LineEdit
-	authorEdit  *walk.LineEdit
-	procEdit    *walk.LineEdit
-	toggleCombo *walk.ComboBox
-	toggleItems []keyChoice
+	// 左栏原生 TabWidget (4套独立方案页)
+	tabWidget *walk.TabWidget
 
-	profileNameEdit *walk.LineEdit
-	switchCombo     *walk.ComboBox
-	switchItems     []keyChoice
-	profileInfo     *walk.Label
+	// 4个配置 × 6个核心技能槽位的行控件
+	slotKeyBtns       [maxProfiles][numSlots]*walk.PushButton
+	slotStrategyComs  [maxProfiles][numSlots]*walk.ComboBox
+	slotIntervalEdits [maxProfiles][numSlots]*walk.LineEdit
 
-	ruleList     *walk.ListBox
-	triggerCombo *walk.ComboBox
-	holdKeyCombo *walk.ComboBox
-	holdKeyItems []keyChoice
-	actionCombo  *walk.ComboBox
-	keyLabels    [maxSeqKeys]*walk.Label
-	keyCombos    [maxSeqKeys]*walk.ComboBox
-	keyItems     [maxSeqKeys][]keyChoice
-	keysRow34    *walk.Composite
-	intervalEdit *walk.LineEdit
-	hintLabel    *walk.Label
+	// 4个配置对应的设置项
+	profileNameEdits [maxProfiles]*walk.LineEdit
+	switchKeyBtns    [maxProfiles]*walk.PushButton
 
-	raw        config.Raw
+	// 内存状态：4个配置各对应一套 6 个技能槽位
+	profileSlots [maxProfiles][numSlots]skillSlotData
+	profileNames [maxProfiles]string
+	profileHKs   [maxProfiles]string
+	startMode    int
+
 	profileIdx int
-	ruleIdx    int
+	raw        config.Raw
 	loading    bool
+
+	// 快捷键捕获状态
+	capturingTab  int
+	capturingSlot int
 
 	hiddenHintShown bool
 }
 
 func (a *app) createMainWindow() error {
-	w := &mainWindow{app: a}
+	w := &mainWindow{
+		app:           a,
+		capturingTab:  -1,
+		capturingSlot: -1,
+	}
+
+	// 1. 获取屏幕物理分辨率，居中计算固定坐标
+	screenWidth := int(win.GetSystemMetrics(win.SM_CXSCREEN))
+	screenHeight := int(win.GetSystemMetrics(win.SM_CYSCREEN))
+	posX := (screenWidth - fixedWinWidth) / 2
+	posY := (screenHeight - fixedWinHeight) / 2
+	if posX < 0 {
+		posX = 50
+	}
+	if posY < 0 {
+		posY = 50
+	}
+
+	// 2. 声明式构建窗口（Visible: false，避免白屏闪烁；固定尺寸，锁死宽高）
 	err := decl.MainWindow{
-		AssignTo: &w.mw,
-		Title:    fmt.Sprintf("%s v%s", appName, version),
-		Icon:     a.icon,
-		Size:     decl.Size{Width: 940, Height: 640}, // 显式给初始尺寸：不设时 walk 会撑到整个桌面
-		MinSize:  decl.Size{Width: 900, Height: 600},
-		Layout:   decl.VBox{},
+		AssignTo:        &w.mw,
+		Title:           fmt.Sprintf("%s v%s", appName, version),
+		Icon:            a.icon,
+		Font:            decl.Font{Family: "Microsoft YaHei UI", PointSize: 9},
+		Bounds:          decl.Rectangle{X: posX, Y: posY, Width: fixedWinWidth, Height: fixedWinHeight},
+		Size:            decl.Size{Width: fixedWinWidth, Height: fixedWinHeight},
+		MinSize:         decl.Size{Width: fixedWinWidth, Height: fixedWinHeight},
+		MaxSize:         decl.Size{Width: fixedWinWidth, Height: fixedWinHeight},
+		Visible:         false,
+		DoubleBuffering: true,
+		Layout:          decl.VBox{Margins: decl.Margins{Left: 10, Top: 8, Right: 10, Bottom: 6}, Spacing: 6},
+		OnKeyDown:       w.handleGlobalKeyDown,
 		Children: []decl.Widget{
-			// 第一行：游戏、运行状态、总开关、方案切换
+			// 主体区域：经典左右双栏架构 (左栏 530px 方案技能，右栏 300px 全局控制)
 			decl.Composite{
-				Layout: decl.HBox{},
+				Layout: decl.HBox{MarginsZero: true, Spacing: 8},
 				Children: []decl.Widget{
-					decl.Label{Text: "游戏："},
-					decl.ComboBox{AssignTo: &w.gameCombo, MinSize: decl.Size{Width: 170}, OnCurrentIndexChanged: w.onGameChanged},
-					decl.Label{AssignTo: &w.statusLabel, Text: "状态：未配置", MinSize: decl.Size{Width: 230}},
-					decl.PushButton{AssignTo: &w.toggleBtn, Text: "启用宏", OnClicked: w.onToggleClicked},
-					decl.HSpacer{},
-					decl.Label{Text: "方案："},
-					decl.ComboBox{AssignTo: &w.profileCombo, MinSize: decl.Size{Width: 190}, OnCurrentIndexChanged: w.onProfileChanged},
-				},
-			},
-			// 第二行：配置名、作者、启停键、目标进程
-			decl.Composite{
-				Layout: decl.HBox{},
-				Children: []decl.Widget{
-					decl.Label{Text: "配置名："},
-					decl.LineEdit{AssignTo: &w.nameEdit, MinSize: decl.Size{Width: 170}},
-					decl.Label{Text: "作者："},
-					decl.LineEdit{AssignTo: &w.authorEdit, MinSize: decl.Size{Width: 110}},
-					decl.Label{Text: "启停键："},
-					decl.ComboBox{AssignTo: &w.toggleCombo, MinSize: decl.Size{Width: 110}},
-					decl.Label{Text: "目标进程："},
-					decl.LineEdit{AssignTo: &w.procEdit, MinSize: decl.Size{Width: 170}},
-				},
-			},
-			// 第三行：方案名、方案切换键、方案管理
-			decl.Composite{
-				Layout: decl.HBox{},
-				Children: []decl.Widget{
-					decl.Label{Text: "方案名："},
-					decl.LineEdit{AssignTo: &w.profileNameEdit, MinSize: decl.Size{Width: 170}},
-					decl.Label{Text: "切换键："},
-					decl.ComboBox{AssignTo: &w.switchCombo, MinSize: decl.Size{Width: 110}},
-					decl.PushButton{Text: "新建方案", OnClicked: w.addProfile},
-					decl.PushButton{Text: "复制方案", OnClicked: w.copyProfile},
-					decl.PushButton{Text: "删除方案", OnClicked: w.deleteProfile},
-					decl.Label{AssignTo: &w.profileInfo, Text: ""},
-				},
-			},
-			// 第四行：规则列表 + 规则编辑
-			decl.Composite{
-				Layout: decl.HBox{},
-				Children: []decl.Widget{
-					decl.ListBox{AssignTo: &w.ruleList, MinSize: decl.Size{Width: 430, Height: 300}, OnCurrentIndexChanged: w.onRuleChanged},
+					// ================= 左栏：方案技能与按键设置 =================
 					decl.Composite{
-						Layout: decl.VBox{},
+						MinSize: decl.Size{Width: 525},
+						MaxSize: decl.Size{Width: 525},
+						Layout:  decl.VBox{MarginsZero: true, Spacing: 4},
 						Children: []decl.Widget{
-							decl.Composite{Layout: decl.HBox{}, Children: []decl.Widget{
-								decl.Label{Text: "触发方式："},
-								decl.ComboBox{AssignTo: &w.triggerCombo, MinSize: decl.Size{Width: 150}, OnCurrentIndexChanged: w.onTriggerChanged},
-								decl.Label{Text: "按住键："},
-								decl.ComboBox{AssignTo: &w.holdKeyCombo, MinSize: decl.Size{Width: 120}, OnCurrentIndexChanged: w.onTriggerChanged},
-							}},
-							decl.Composite{Layout: decl.HBox{}, Children: []decl.Widget{
-								decl.Label{Text: "动作："},
-								decl.ComboBox{AssignTo: &w.actionCombo, MinSize: decl.Size{Width: 150}, OnCurrentIndexChanged: w.onActionChanged},
-								decl.Label{Text: "间隔(ms)："},
-								decl.LineEdit{AssignTo: &w.intervalEdit, MinSize: decl.Size{Width: 100}},
-							}},
-							decl.Composite{Layout: decl.HBox{}, Children: []decl.Widget{
-								decl.Label{AssignTo: &w.keyLabels[0], Text: "按键："},
-								decl.ComboBox{AssignTo: &w.keyCombos[0], MinSize: decl.Size{Width: 110}},
-								decl.Label{AssignTo: &w.keyLabels[1], Text: "序列2："},
-								decl.ComboBox{AssignTo: &w.keyCombos[1], MinSize: decl.Size{Width: 110}},
-							}},
-							decl.Composite{AssignTo: &w.keysRow34, Layout: decl.HBox{}, Children: []decl.Widget{
-								decl.Label{AssignTo: &w.keyLabels[2], Text: "序列3："},
-								decl.ComboBox{AssignTo: &w.keyCombos[2], MinSize: decl.Size{Width: 110}},
-								decl.Label{AssignTo: &w.keyLabels[3], Text: "序列4："},
-								decl.ComboBox{AssignTo: &w.keyCombos[3], MinSize: decl.Size{Width: 110}},
-							}},
-							decl.Composite{Layout: decl.HBox{}, Children: []decl.Widget{
-								decl.PushButton{Text: "添加规则", OnClicked: w.addRule},
-								decl.PushButton{Text: "删除规则", OnClicked: w.deleteRule},
-								decl.HSpacer{},
-							}},
-							decl.Label{AssignTo: &w.hintLabel, Text: ""},
+							decl.TabWidget{
+								AssignTo:              &w.tabWidget,
+								OnCurrentIndexChanged: w.onTabChanged,
+								Pages: []decl.TabPage{
+									w.createTabPage(0),
+									w.createTabPage(1),
+									w.createTabPage(2),
+									w.createTabPage(3),
+								},
+							},
+						},
+					},
+
+					// ================= 右栏：全局仪表盘与总控制 =================
+					decl.Composite{
+						MinSize: decl.Size{Width: 295},
+						MaxSize: decl.Size{Width: 295},
+						Layout:  decl.VBox{MarginsZero: true, Spacing: 6},
+						Children: []decl.Widget{
+							// 1. 战斗宏启停总控卡片 (视觉重心，红字加粗突出)
+							decl.GroupBox{
+								Title:  "战斗宏总控",
+								Layout: decl.VBox{Margins: decl.Margins{Left: 10, Top: 8, Right: 10, Bottom: 8}, Spacing: 6},
+								Children: []decl.Widget{
+									decl.Composite{
+										Layout: decl.HBox{MarginsZero: true, Spacing: 6},
+										Children: []decl.Widget{
+											decl.Label{
+												Text:    "★ 启动快捷键：",
+												Font:    decl.Font{Bold: true, PointSize: 9},
+												MinSize: decl.Size{Width: 100},
+											},
+											decl.PushButton{
+												AssignTo:  &w.toggleKeyBtn,
+												Text:      "F1",
+												Font:      decl.Font{Bold: true, PointSize: 10},
+												MinSize:   decl.Size{Width: 90, Height: 30},
+												MaxSize:   decl.Size{Width: 90, Height: 30},
+												OnClicked: func() { w.startCapture(-1, 100) },
+												OnKeyDown: w.handleGlobalKeyDown,
+												ToolTipText: "左键点击捕获按键；右键菜单可快速绑定鼠标侧键(X1/X2)或中键",
+												ContextMenuItems: []decl.MenuItem{
+													decl.Action{Text: "🖱️ 设为 鼠标侧键1 (X1)", OnTriggered: func() { w.setToggleKey("X1") }},
+													decl.Action{Text: "🖱️ 设为 鼠标侧键2 (X2)", OnTriggered: func() { w.setToggleKey("X2") }},
+													decl.Action{Text: "🖱️ 设为 鼠标中键 (MMB)", OnTriggered: func() { w.setToggleKey("MMB") }},
+													decl.Separator{},
+													decl.Action{Text: "⌨️ 设为 F1", OnTriggered: func() { w.setToggleKey("F1") }},
+													decl.Action{Text: "⌨️ 设为 F2", OnTriggered: func() { w.setToggleKey("F2") }},
+													decl.Action{Text: "⌨️ 设为 ` (波浪号)", OnTriggered: func() { w.setToggleKey("`") }},
+												},
+											},
+											decl.HSpacer{},
+										},
+									},
+									decl.Composite{
+										Layout: decl.HBox{MarginsZero: true, Spacing: 6},
+										Children: []decl.Widget{
+											decl.Label{Text: "宏启动方式：", MinSize: decl.Size{Width: 80}},
+											decl.ComboBox{
+												AssignTo:              &w.startModeCombo,
+												MinSize:               decl.Size{Width: 160},
+												MaxSize:               decl.Size{Width: 160},
+												OnCurrentIndexChanged: w.onStartModeChanged,
+												ToolTipText:           "懒人模式：按一下开，再按一下关\n仅按下时：按住快捷键(如侧键)触发，松开立即停止",
+											},
+											decl.HSpacer{},
+										},
+									},
+								},
+							},
+
+							// 2. 目标游戏与运行状态卡片
+							decl.GroupBox{
+								Title:  "目标游戏与状态",
+								Layout: decl.VBox{Margins: decl.Margins{Left: 10, Top: 8, Right: 10, Bottom: 8}, Spacing: 6},
+								Children: []decl.Widget{
+									decl.Composite{
+										Layout: decl.HBox{MarginsZero: true, Spacing: 6},
+										Children: []decl.Widget{
+											decl.Label{Text: "当前游戏：", MinSize: decl.Size{Width: 70}},
+											decl.ComboBox{
+												AssignTo:              &w.gameCombo,
+												MinSize:               decl.Size{Width: 170},
+												MaxSize:               decl.Size{Width: 170},
+												OnCurrentIndexChanged: w.onGameChanged,
+											},
+											decl.HSpacer{},
+										},
+									},
+									decl.Label{
+										AssignTo: &w.statusLabel,
+										Text:     "🟢 宏已就绪（前台自动生效）",
+										Font:     decl.Font{Bold: true},
+									},
+									decl.Label{
+										AssignTo: &w.targetProcLbl,
+										Text:     "🎮 目标进程：Diablo IV.exe",
+									},
+								},
+							},
+
+							// 3. 快捷操作卡片
+							decl.GroupBox{
+								Title:  "快捷操作",
+								Layout: decl.VBox{Margins: decl.Margins{Left: 10, Top: 8, Right: 10, Bottom: 8}, Spacing: 6},
+								Children: []decl.Widget{
+									decl.PushButton{
+										Text:      "💾 保存并应用配置",
+										Font:      decl.Font{Bold: true, PointSize: 9},
+										MinSize:   decl.Size{Height: 28},
+										OnClicked: w.saveAndApply,
+									},
+									decl.Composite{
+										Layout: decl.HBox{MarginsZero: true, Spacing: 6},
+										Children: []decl.Widget{
+											decl.PushButton{Text: "📋 导入分享码", MinSize: decl.Size{Height: 26}, OnClicked: func() { a.importFromClipboard() }},
+											decl.PushButton{Text: "📤 复制分享码", MinSize: decl.Size{Height: 26}, OnClicked: w.exportCode},
+										},
+									},
+									decl.PushButton{Text: "📄 查看运行日志", MinSize: decl.Size{Height: 26}, OnClicked: a.showLogWindow},
+								},
+							},
 							decl.VSpacer{},
 						},
 					},
 				},
 			},
-			// 第五行：保存与分享、日志与退出
+
+			// 底部状态栏：显式标红突出当前激活配置与安全保障
 			decl.Composite{
-				Layout: decl.HBox{},
+				Layout: decl.HBox{Margins: decl.Margins{Left: 4, Top: 2, Right: 4, Bottom: 2}, Spacing: 10},
 				Children: []decl.Widget{
-					decl.PushButton{Text: "保存并应用", OnClicked: w.saveAndApply},
-					decl.PushButton{Text: "从剪贴板导入分享码", OnClicked: func() { a.importFromClipboard() }},
-					decl.PushButton{Text: "复制分享码", OnClicked: w.exportCode},
+					decl.Label{
+						AssignTo: &w.activeProfLbl,
+						Text:     "当前激活配置：配置 1",
+						Font:     decl.Font{Bold: true, PointSize: 9},
+					},
 					decl.HSpacer{},
-					decl.PushButton{Text: "查看日志", OnClicked: a.showLogWindow},
-					decl.PushButton{Text: "打开数据目录", OnClicked: a.openDataDir},
-					decl.PushButton{Text: "退出", OnClicked: a.quitApp},
+					decl.Label{
+						Text: "Win32 SendInput · 零驱动零注入 · 智能找色续航已就绪",
+					},
 				},
 			},
 		},
@@ -183,22 +302,144 @@ func (a *app) createMainWindow() error {
 		return err
 	}
 
+	// 3. 锁定 Win32 窗口样式：彻底移除 WS_MAXIMIZEBOX (最大化按钮) 和 WS_THICKFRAME (拖拽边框)
+	hwnd := w.mw.Handle()
+	style := win.GetWindowLong(hwnd, win.GWL_STYLE)
+	style &^= (win.WS_MAXIMIZEBOX | win.WS_THICKFRAME)
+	win.SetWindowLong(hwnd, win.GWL_STYLE, style)
+	win.SetWindowPos(hwnd, 0, int32(posX), int32(posY), int32(fixedWinWidth), int32(fixedWinHeight),
+		win.SWP_NOZORDER|win.SWP_FRAMECHANGED)
+
 	w.mw.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
 		*canceled = true
 		w.mw.Hide()
 		if !w.hiddenHintShown {
 			w.hiddenHintShown = true
-			if err := a.ni.ShowInfo(appName, "已最小化到托盘，宏会继续运行。\n双击托盘图标可以再次打开本窗口。"); err != nil {
-				a.log.Printf("[托盘] 气泡提示失败：%v", err)
+			if a.ni != nil {
+				if err := a.ni.ShowInfo(appName, "已最小化到托盘，宏会继续运行。\n双击托盘图标可以再次打开本窗口。"); err != nil {
+					a.log.Printf("[托盘] 气泡提示失败：%v", err)
+				}
 			}
 		}
 	})
 
 	a.win = w
+
+	// 4. 在完全加载配置、调整好坐标并完成初次渲染后再显示，彻底杜绝白屏闪烁
 	w.loadFromState()
 	w.mw.Show()
-	a.log.Printf("[窗口] 主窗口已打开")
+	a.log.Printf("[窗口] 主窗口已打开（固定尺寸 %dx%d，左右双栏布局）", fixedWinWidth, fixedWinHeight)
 	return nil
+}
+
+func (w *mainWindow) createTabPage(tabIdx int) decl.TabPage {
+	t := tabIdx
+	return decl.TabPage{
+		Title:  fmt.Sprintf("配置 %d", t+1),
+		Layout: decl.VBox{Margins: decl.Margins{Left: 6, Top: 6, Right: 6, Bottom: 6}, Spacing: 4},
+		Children: []decl.Widget{
+			// 按键宏设置 GroupBox (高密度紧凑网格，去除冗长文字，采用 ToolTip)
+			decl.GroupBox{
+				Title:  "按键宏设置",
+				Layout: decl.VBox{Margins: decl.Margins{Left: 8, Top: 6, Right: 8, Bottom: 6}, Spacing: 4},
+				Children: []decl.Widget{
+					decl.Composite{
+						Layout: decl.HBox{Spacing: 8},
+						Children: []decl.Widget{
+							decl.Label{Text: "技能槽位", MinSize: decl.Size{Width: 65}, MaxSize: decl.Size{Width: 65}, Font: decl.Font{Bold: true}},
+							decl.Label{Text: "快捷键", MinSize: decl.Size{Width: 80}, MaxSize: decl.Size{Width: 80}, Font: decl.Font{Bold: true}},
+							decl.Label{Text: "释放策略", MinSize: decl.Size{Width: 105}, MaxSize: decl.Size{Width: 105}, Font: decl.Font{Bold: true}},
+							decl.Label{Text: "执行间隔", MinSize: decl.Size{Width: 80}, MaxSize: decl.Size{Width: 80}, Font: decl.Font{Bold: true}},
+							decl.Label{Text: "单位", MinSize: decl.Size{Width: 35}, MaxSize: decl.Size{Width: 35}, Font: decl.Font{Bold: true}},
+							decl.HSpacer{},
+						},
+					},
+					w.createSlotRow(t, 0, "技能一："),
+					w.createSlotRow(t, 1, "技能二："),
+					w.createSlotRow(t, 2, "技能三："),
+					w.createSlotRow(t, 3, "技能四："),
+					w.createSlotRow(t, 4, "左键技能："),
+					w.createSlotRow(t, 5, "右键技能："),
+				},
+			},
+			// 本配置设置 GroupBox
+			decl.GroupBox{
+				Title:  "本配置设置",
+				Layout: decl.HBox{Margins: decl.Margins{Left: 8, Top: 6, Right: 8, Bottom: 6}, Spacing: 8},
+				Children: []decl.Widget{
+					decl.Label{Text: "配置名：", MinSize: decl.Size{Width: 55}},
+					decl.LineEdit{
+						AssignTo:          &w.profileNameEdits[t],
+						MinSize:           decl.Size{Width: 110},
+						MaxSize:           decl.Size{Width: 110},
+						OnEditingFinished: func() { w.onProfileNameEdited(t) },
+						ToolTipText:       "为本套配置起一个容易识别的名称（如：速刷大米 / 攻坚冲层）",
+					},
+					decl.Label{Text: "切换快捷键：", MinSize: decl.Size{Width: 75}},
+					decl.PushButton{
+						AssignTo:    &w.switchKeyBtns[t],
+						Text:        "无",
+						MinSize:     decl.Size{Width: 70, Height: 24},
+						MaxSize:     decl.Size{Width: 70, Height: 24},
+						OnClicked:   func() { w.startCapture(t, 101) },
+						OnKeyDown:   w.handleGlobalKeyDown,
+						ToolTipText: "在游戏中按下此键，可无缝秒切至本套配置；右键可清除",
+						ContextMenuItems: []decl.MenuItem{
+							decl.Action{Text: "❌ 清除切换键 (设为无)", OnTriggered: func() { w.clearSwitchKey(t) }},
+						},
+					},
+					decl.HSpacer{},
+				},
+			},
+		},
+	}
+}
+
+func (w *mainWindow) createSlotRow(t, s int, labelText string) decl.Widget {
+	return decl.Composite{
+		Layout: decl.HBox{Spacing: 8},
+		Children: []decl.Widget{
+			decl.Label{Text: labelText, MinSize: decl.Size{Width: 65}, MaxSize: decl.Size{Width: 65}},
+			decl.PushButton{
+				AssignTo:  &w.slotKeyBtns[t][s],
+				Text:      "1",
+				MinSize:   decl.Size{Width: 80, Height: 24},
+				MaxSize:   decl.Size{Width: 80, Height: 24},
+				OnClicked: func() { w.startCapture(t, s) },
+				OnKeyDown: w.handleGlobalKeyDown,
+				ToolTipText: "左键点击后按键盘任意键录入；右键弹出菜单快速选择鼠标侧键/按键",
+				ContextMenuItems: []decl.MenuItem{
+					decl.Action{Text: "🖱️ 设为 鼠标左键 (LMB)", OnTriggered: func() { w.setSlotKey(t, s, "LMB") }},
+					decl.Action{Text: "🖱️ 设为 鼠标右键 (RMB)", OnTriggered: func() { w.setSlotKey(t, s, "RMB") }},
+					decl.Action{Text: "🖱️ 设为 鼠标中键 (MMB)", OnTriggered: func() { w.setSlotKey(t, s, "MMB") }},
+					decl.Action{Text: "🖱️ 设为 鼠标侧键1 (X1)", OnTriggered: func() { w.setSlotKey(t, s, "X1") }},
+					decl.Action{Text: "🖱️ 设为 鼠标侧键2 (X2)", OnTriggered: func() { w.setSlotKey(t, s, "X2") }},
+					decl.Separator{},
+					decl.Action{Text: "⌨️ 恢复默认键", OnTriggered: func() { w.resetSlotKey(t, s) }},
+				},
+			},
+			decl.ComboBox{
+				AssignTo:              &w.slotStrategyComs[t][s],
+				MinSize:               decl.Size{Width: 105},
+				MaxSize:               decl.Size{Width: 105},
+				OnCurrentIndexChanged: func() { w.onSlotStrategyChanged(t, s) },
+				ToolTipText: "策略说明：\n· 禁用：不自动触发\n· 按住不放：旋风斩/扫射引导技能，战斗中持续按下\n· 连点：按指定间隔持续点击\n· 保持Buff：智能检测发光环(D3)或定时补放，未断绝不抢按",
+			},
+			decl.LineEdit{
+				AssignTo:      &w.slotIntervalEdits[t][s],
+				MinSize:       decl.Size{Width: 80},
+				MaxSize:       decl.Size{Width: 80},
+				OnTextChanged: func() { w.onSlotIntervalChanged(t, s) },
+				ToolTipText:   "执行间隔（毫秒）：\n· 连点模式：技能连发的间隔\n· 保持Buff模式：屏幕找色采样的频率或定时续航周期",
+			},
+			decl.Label{
+				Text:    "毫秒",
+				MinSize: decl.Size{Width: 35},
+				MaxSize: decl.Size{Width: 35},
+			},
+			decl.HSpacer{},
+		},
+	}
 }
 
 // showMainWindow 由托盘菜单与双击托盘图标调用。
@@ -216,54 +457,7 @@ func (a *app) showMainWindow() {
 	}
 }
 
-func (w *mainWindow) fatal(err error) {
-	w.app.log.Printf("[窗口] 界面操作失败：%v", err)
-	walk.MsgBox(w.mw, appName, "界面操作失败：\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
-}
-
-func (w *mainWindow) setText(le *walk.LineEdit, s string) {
-	if err := le.SetText(s); err != nil {
-		w.fatal(err)
-	}
-}
-
-func (w *mainWindow) setLabel(l *walk.Label, s string) {
-	if err := l.SetText(s); err != nil {
-		w.fatal(err)
-	}
-}
-
-func (w *mainWindow) setButtonText(b *walk.PushButton, s string) {
-	if err := b.SetText(s); err != nil {
-		w.fatal(err)
-	}
-}
-
-func (w *mainWindow) setCombo(cb *walk.ComboBox, items []string, idx int) {
-	if err := cb.SetModel(items); err != nil {
-		w.fatal(err)
-		return
-	}
-	if idx < 0 || idx >= len(items) {
-		idx = 0
-	}
-	if len(items) == 0 {
-		return
-	}
-	if err := cb.SetCurrentIndex(idx); err != nil {
-		w.fatal(err)
-	}
-}
-
-func (w *mainWindow) profile() *config.RawProfile {
-	return &w.raw.Profiles[w.profileIdx]
-}
-
-func defaultProfile() config.RawProfile {
-	return config.RawProfile{Rules: []config.RawRule{{Trigger: "t", Action: "tap:1", IntervalMS: 300}}}
-}
-
-// loadFromState 用运行期状态重建整个窗口内容（外部动作后调用）。
+// loadFromState 用运行期状态初始化并重绘整个窗口。
 func (w *mainWindow) loadFromState() {
 	snap := w.app.st.snapshot()
 
@@ -276,219 +470,374 @@ func (w *mainWindow) loadFromState() {
 		w.raw = defaultConfig()
 		w.raw.Game = w.app.settings.CurrentGame
 	}
-	if len(w.raw.Profiles) == 0 {
-		w.raw.Profiles = []config.RawProfile{defaultProfile()}
+
+	w.startMode = snap.StartMode
+
+	for i := 0; i < maxProfiles; i++ {
+		if i < len(w.raw.Profiles) {
+			p := w.raw.Profiles[i]
+			w.profileSlots[i] = profileToSlots(p)
+			w.profileNames[i] = p.Name
+			if w.profileNames[i] == "" {
+				w.profileNames[i] = fmt.Sprintf("配置 %d", i+1)
+			}
+			w.profileHKs[i] = p.HK
+		} else {
+			w.profileSlots[i] = defaultSlots()
+			w.profileNames[i] = fmt.Sprintf("配置 %d", i+1)
+			w.profileHKs[i] = ""
+		}
 	}
+
 	w.profileIdx = 0
 	if snap.Engine != nil {
 		w.profileIdx = snap.Engine.ProfileIndex()
 	}
-	if w.profileIdx < 0 || w.profileIdx >= len(w.raw.Profiles) {
+	if w.profileIdx < 0 || w.profileIdx >= maxProfiles {
 		w.profileIdx = 0
 	}
-	w.ruleIdx = 0
 
 	if err := w.mw.SetTitle(fmt.Sprintf("%s v%s — %s", appName, version, gameDisplayName(w.app.settings.CurrentGame))); err != nil {
-		w.fatal(err)
+		w.app.log.Printf("[窗口] 设置标题失败：%v", err)
 	}
+
 	w.setCombo(w.gameCombo, gameNames(), gameIndex(w.app.settings.CurrentGame))
-	w.setText(w.nameEdit, w.raw.Name)
-	w.setText(w.authorEdit, w.raw.Author)
-	w.setText(w.procEdit, w.app.targetProcessOf(w.app.settings.CurrentGame))
-	toggle := strings.TrimSpace(w.raw.Toggle)
-	if toggle == "" {
-		toggle = "F1"
+	w.setCombo(w.startModeCombo, startModeNames, w.startMode)
+
+	for t := 0; t < maxProfiles; t++ {
+		for s := 0; s < numSlots; s++ {
+			w.setCombo(w.slotStrategyComs[t][s], strategyNames, 0)
+		}
 	}
-	w.toggleItems = w.setChoiceCombo(w.toggleCombo, keyboardKeyChoices(), toggle)
-	w.setCombo(w.triggerCombo, triggerItems, 0)
-	w.setCombo(w.actionCombo, actionItems, 0)
-	w.refreshProfiles()
+
+	// 将内存数据刷新到每个 Tab 对应的控件中
+	for t := 0; t < maxProfiles; t++ {
+		w.setText(w.profileNameEdits[t], w.profileNames[t])
+		if w.tabWidget != nil && t < w.tabWidget.Pages().Len() {
+			_ = w.tabWidget.Pages().At(t).SetTitle(w.profileNames[t])
+		}
+		if w.profileHKs[t] == "" {
+			w.setButtonText(w.switchKeyBtns[t], "无")
+		} else {
+			w.setButtonText(w.switchKeyBtns[t], keyNameOfToken(w.profileHKs[t]))
+		}
+
+		for s := 0; s < numSlots; s++ {
+			slot := w.profileSlots[t][s]
+			w.setButtonText(w.slotKeyBtns[t][s], keyNameOfToken(slot.Key))
+			_ = w.slotStrategyComs[t][s].SetCurrentIndex(slot.Strategy)
+			switch slot.Strategy {
+			case 0, 1: // 禁用, 按住不放
+				w.setText(w.slotIntervalEdits[t][s], "—")
+				w.slotIntervalEdits[t][s].SetEnabled(false)
+			case 2: // 连点
+				w.setText(w.slotIntervalEdits[t][s], strconv.Itoa(slot.IntervalMS))
+				w.slotIntervalEdits[t][s].SetEnabled(true)
+			case 3: // 保持Buff
+				if slot.IntervalMS <= 0 {
+					slot.IntervalMS = 300
+				}
+				w.setText(w.slotIntervalEdits[t][s], strconv.Itoa(slot.IntervalMS))
+				w.slotIntervalEdits[t][s].SetEnabled(true)
+			}
+		}
+	}
+
+	if w.tabWidget != nil && w.tabWidget.CurrentIndex() != w.profileIdx {
+		_ = w.tabWidget.SetCurrentIndex(w.profileIdx)
+	}
+
+	w.refreshGlobalViews()
+}
+
+func (w *mainWindow) refreshGlobalViews() {
+	snap := w.app.st.snapshot()
+	toggleKey := w.raw.Toggle
+	if toggleKey == "" {
+		toggleKey = "F1"
+	}
+	if snap.ToggleVK != 0 {
+		toggleKey = keyName(snap.ToggleVK)
+	}
+	w.setButtonText(w.toggleKeyBtn, toggleKey)
+
+	for t := 0; t < maxProfiles; t++ {
+		title := w.profileNames[t]
+		if title == "" {
+			title = fmt.Sprintf("配置 %d", t+1)
+		}
+		if w.tabWidget != nil && t < w.tabWidget.Pages().Len() {
+			_ = w.tabWidget.Pages().At(t).SetTitle(title)
+		}
+	}
+
 	w.refreshStatus()
 }
 
-// refreshStatus 只刷新与宏运行状态相关的控件（热键切换等高频路径）。
+// refreshStatus 刷新宏运行状态文本与底栏信息。
 func (w *mainWindow) refreshStatus() {
 	if w.mw == nil {
 		return
 	}
 	snap := w.app.st.snapshot()
+	toggleName := "F1"
+	if snap.ToggleVK != 0 {
+		toggleName = keyName(snap.ToggleVK)
+	} else if w.raw.Toggle != "" {
+		toggleName = keyNameOfToken(w.raw.Toggle)
+	}
+
+	// 更新底栏激活配置信息
+	profName := fmt.Sprintf("配置 %d", w.profileIdx+1)
+	if w.profileIdx >= 0 && w.profileIdx < maxProfiles && w.profileNames[w.profileIdx] != "" {
+		profName = w.profileNames[w.profileIdx]
+	}
+	w.setLabel(w.activeProfLbl, fmt.Sprintf("当前激活配置：%s", profName))
+	w.setLabel(w.targetProcLbl, fmt.Sprintf("🎮 目标进程：%s", snap.TargetProcess))
+
+	if snap.StartMode == 1 { // 仅按下时 (按住生效)
+		if snap.Engine != nil && snap.Engine.Enabled() {
+			w.setLabel(w.statusLabel, fmt.Sprintf("🟢 宏运行中（按住 %s 生效中）", toggleName))
+		} else {
+			w.setLabel(w.statusLabel, fmt.Sprintf("🟡 按住生效模式（按住 %s 触发，松开即停）", toggleName))
+		}
+		return
+	}
+
+	// 懒人模式 (开关切换)
 	switch {
 	case snap.Engine == nil:
-		w.setLabel(w.statusLabel, "状态：未配置")
-		w.setButtonText(w.toggleBtn, "启用宏（先保存配置）")
+		w.setLabel(w.statusLabel, "🟢 宏已就绪（进入游戏窗口自动生效）")
 	case snap.Engine.Enabled():
-		w.setLabel(w.statusLabel, "状态：已开启（"+keyName(snap.ToggleVK)+" 停止）")
-		w.setButtonText(w.toggleBtn, "停用宏")
+		w.setLabel(w.statusLabel, fmt.Sprintf("🟢 宏已就绪（前台自动生效 · 按 %s 暂停）", toggleName))
 	default:
-		w.setLabel(w.statusLabel, "状态：已关闭（"+keyName(snap.ToggleVK)+" 启用）")
-		w.setButtonText(w.toggleBtn, "启用宏")
+		w.setLabel(w.statusLabel, fmt.Sprintf("⏸️ 宏已暂停（在游戏内按 %s 恢复运行）", toggleName))
 	}
 }
 
-func (w *mainWindow) refreshProfiles() {
-	names := make([]string, 0, len(w.raw.Profiles))
-	for i, p := range w.raw.Profiles {
-		n := p.Name
-		if n == "" {
-			n = fmt.Sprintf("方案 %d", i+1)
-		}
-		names = append(names, fmt.Sprintf("%d · %s", i+1, n))
-	}
-	if w.profileIdx < 0 || w.profileIdx >= len(w.raw.Profiles) {
-		w.profileIdx = 0
-	}
-	w.setCombo(w.profileCombo, names, w.profileIdx)
-	w.setLabel(w.profileInfo, fmt.Sprintf("共 %d/%d 个方案", len(w.raw.Profiles), maxProfiles))
-	w.setText(w.profileNameEdit, w.profile().Name)
-	w.switchItems = w.setChoiceCombo(w.switchCombo, withNone("（无）", keyboardKeyChoices()), w.profile().HK)
-	w.refreshRules()
-}
-
-func (w *mainWindow) refreshRules() {
-	rules := w.profile().Rules
-	if len(rules) == 0 {
-		w.ruleIdx = -1
-		if err := w.ruleList.SetModel([]string{}); err != nil {
-			w.fatal(err)
-		}
-		w.clearRuleFields()
+func (w *mainWindow) onTabChanged() {
+	if w.loading || w.tabWidget == nil {
 		return
 	}
-	items := make([]string, 0, len(rules))
-	for i, r := range rules {
-		items = append(items, fmt.Sprintf("%d. %s", i+1, describeRawRule(r)))
-	}
-	if w.ruleIdx < 0 || w.ruleIdx >= len(rules) {
-		w.ruleIdx = 0
-	}
-	if err := w.ruleList.SetModel(items); err != nil {
-		w.fatal(err)
+	idx := w.tabWidget.CurrentIndex()
+	if idx < 0 || idx >= maxProfiles || idx == w.profileIdx {
 		return
 	}
-	if err := w.ruleList.SetCurrentIndex(w.ruleIdx); err != nil {
-		w.fatal(err)
+	w.flushAllTabs()
+	w.profileIdx = idx
+	w.app.switchProfile(idx)
+	w.refreshStatus()
+}
+
+func (w *mainWindow) flushAllTabs() {
+	for t := 0; t < maxProfiles; t++ {
+		if w.profileNameEdits[t] != nil {
+			name := strings.TrimSpace(w.profileNameEdits[t].Text())
+			if name != "" {
+				w.profileNames[t] = name
+			}
+		}
+		for s := 0; s < numSlots; s++ {
+			slot := &w.profileSlots[t][s]
+			if w.slotStrategyComs[t][s] != nil {
+				slot.Strategy = w.slotStrategyComs[t][s].CurrentIndex()
+			}
+			if w.slotIntervalEdits[t][s] != nil && (slot.Strategy == strategySpam || slot.Strategy == strategyBuff) {
+				if n, err := strconv.Atoi(strings.TrimSpace(w.slotIntervalEdits[t][s].Text())); err == nil && n > 0 {
+					slot.IntervalMS = n
+				}
+			}
+		}
+	}
+	if w.startModeCombo != nil {
+		w.startMode = w.startModeCombo.CurrentIndex()
+	}
+}
+
+func (w *mainWindow) onSlotStrategyChanged(t, s int) {
+	if w.loading {
 		return
 	}
-	w.loadRuleFields()
-}
+	slot := &w.profileSlots[t][s]
+	slot.Strategy = w.slotStrategyComs[t][s].CurrentIndex()
 
-func (w *mainWindow) clearRuleFields() {
-	w.loading = true
-	defer func() { w.loading = false }()
-	w.setCombo(w.triggerCombo, triggerItems, 0)
-	w.holdKeyItems = w.setChoiceCombo(w.holdKeyCombo, skillKeyChoices(), "")
-	w.setCombo(w.actionCombo, actionItems, 0)
-	for i := 0; i < maxSeqKeys; i++ {
-		base := skillKeyChoices()
-		if i > 0 {
-			base = withNone("（不使用）", base)
+	switch slot.Strategy {
+	case 0, 1: // 禁用, 按住不放
+		w.setText(w.slotIntervalEdits[t][s], "—")
+		w.slotIntervalEdits[t][s].SetEnabled(false)
+	case 2: // 连点
+		w.slotIntervalEdits[t][s].SetEnabled(true)
+		if slot.IntervalMS <= 0 {
+			slot.IntervalMS = 250
 		}
-		w.keyItems[i] = w.setChoiceCombo(w.keyCombos[i], base, "")
+		w.setText(w.slotIntervalEdits[t][s], strconv.Itoa(slot.IntervalMS))
+	case 3: // 保持Buff
+		w.slotIntervalEdits[t][s].SetEnabled(true)
+		if slot.IntervalMS <= 0 {
+			slot.IntervalMS = 300
+		}
+		w.setText(w.slotIntervalEdits[t][s], strconv.Itoa(slot.IntervalMS))
 	}
-	w.setText(w.intervalEdit, "")
-	w.updateRuleFieldsState()
 }
 
-func (w *mainWindow) loadRuleFields() {
-	w.loading = true
-	defer func() { w.loading = false }()
-	rules := w.profile().Rules
-	if len(rules) == 0 || w.ruleIdx < 0 || w.ruleIdx >= len(rules) {
+func (w *mainWindow) onSlotIntervalChanged(t, s int) {
+	if w.loading {
 		return
 	}
-	r := rules[w.ruleIdx]
-	if strings.HasPrefix(r.Trigger, "h:") {
-		w.setCombo(w.triggerCombo, triggerItems, 1)
-		w.holdKeyItems = w.setChoiceCombo(w.holdKeyCombo, skillKeyChoices(), strings.TrimPrefix(r.Trigger, "h:"))
-	} else {
-		w.setCombo(w.triggerCombo, triggerItems, 0)
-		w.holdKeyItems = w.setChoiceCombo(w.holdKeyCombo, skillKeyChoices(), "")
+	slot := &w.profileSlots[t][s]
+	if slot.Strategy != 2 && slot.Strategy != 3 {
+		return
 	}
-	kind, arg, ok := strings.Cut(r.Action, ":")
-	if !ok {
-		kind, arg = actionCodes[0], ""
-	}
-	idx := 0
-	for i, c := range actionCodes {
-		if c == kind {
-			idx = i
-		}
-	}
-	w.setCombo(w.actionCombo, actionItems, idx)
-
-	var tokens [maxSeqKeys]string
-	if kind == actionCodes[actionSeqIdx] {
-		parts := strings.Split(arg, ",")
-		for i := 0; i < maxSeqKeys && i < len(parts); i++ {
-			tokens[i] = strings.TrimSpace(parts[i])
-		}
-	} else {
-		tokens[0] = strings.TrimSpace(arg)
-	}
-	for i := 0; i < maxSeqKeys; i++ {
-		base := skillKeyChoices()
-		if i > 0 {
-			base = withNone("（不使用）", base)
-		}
-		w.keyItems[i] = w.setChoiceCombo(w.keyCombos[i], base, tokens[i])
-	}
-	if r.IntervalMS > 0 {
-		w.setText(w.intervalEdit, strconv.Itoa(r.IntervalMS))
-	} else {
-		w.setText(w.intervalEdit, "")
-	}
-	w.updateRuleFieldsState()
-}
-
-// setRuleFieldsEnabled 在「当前方案没有规则」时把规则字段整体置灰。
-func (w *mainWindow) setRuleFieldsEnabled(on bool) {
-	w.triggerCombo.SetEnabled(on)
-	w.holdKeyCombo.SetEnabled(on)
-	w.actionCombo.SetEnabled(on)
-	w.intervalEdit.SetEnabled(on)
-	for i := 0; i < maxSeqKeys; i++ {
-		w.keyCombos[i].SetEnabled(on)
-		w.keyLabels[i].SetEnabled(on)
+	text := strings.TrimSpace(w.slotIntervalEdits[t][s].Text())
+	if n, err := strconv.Atoi(text); err == nil && n > 0 {
+		slot.IntervalMS = n
 	}
 }
 
-// updateRuleFieldsState 按当前动作与触发方式联动字段的可见性、可用性与提示文案。
-func (w *mainWindow) updateRuleFieldsState() {
-	rules := w.profile().Rules
-	hasRule := w.ruleIdx >= 0 && w.ruleIdx < len(rules)
-	w.setRuleFieldsEnabled(hasRule)
-	if !hasRule {
-		w.setLabel(w.hintLabel, "（当前方案没有规则，点「添加规则」新建）")
-		w.keysRow34.SetVisible(false)
-		w.keyLabels[1].SetVisible(false)
-		w.keyCombos[1].SetVisible(false)
+func (w *mainWindow) onProfileNameEdited(t int) {
+	if w.loading {
+		return
+	}
+	name := strings.TrimSpace(w.profileNameEdits[t].Text())
+	if name == "" {
+		name = fmt.Sprintf("配置 %d", t+1)
+	}
+	w.profileNames[t] = name
+	if w.tabWidget != nil && t < w.tabWidget.Pages().Len() {
+		_ = w.tabWidget.Pages().At(t).SetTitle(name)
+	}
+	w.refreshStatus()
+}
+
+func (w *mainWindow) onStartModeChanged() {
+	if w.loading {
+		return
+	}
+	w.startMode = w.startModeCombo.CurrentIndex()
+	_ = w.saveToState(true)
+	w.refreshStatus()
+}
+
+// 快捷键录入捕获系统
+func (w *mainWindow) startCapture(tabIdx, slotIdx int) {
+	if w.capturingSlot == slotIdx && w.capturingTab == tabIdx {
+		w.cancelCapture()
+		return
+	}
+	w.cancelCapture()
+	w.capturingTab = tabIdx
+	w.capturingSlot = slotIdx
+	btn := w.targetButton(tabIdx, slotIdx)
+	if btn != nil {
+		w.setButtonText(btn, "【按键】")
+		_ = btn.SetFocus()
+	}
+}
+
+func (w *mainWindow) cancelCapture() {
+	if w.capturingSlot < 0 {
+		return
+	}
+	t := w.capturingTab
+	s := w.capturingSlot
+	w.capturingTab = -1
+	w.capturingSlot = -1
+	btn := w.targetButton(t, s)
+	if btn == nil {
 		return
 	}
 
-	seq := w.actionCombo.CurrentIndex() == actionSeqIdx
-	kind := w.actionCombo.CurrentIndex()
-
-	w.setLabel(w.keyLabels[0], "按键：")
-	if seq {
-		w.setLabel(w.keyLabels[0], "序列1：")
+	switch {
+	case s >= 0 && s < numSlots && t >= 0 && t < maxProfiles:
+		w.setButtonText(btn, keyNameOfToken(w.profileSlots[t][s].Key))
+	case s == 100:
+		tk := w.raw.Toggle
+		if tk == "" {
+			tk = "F1"
+		}
+		w.setButtonText(btn, keyNameOfToken(tk))
+	case s == 101 && t >= 0 && t < maxProfiles:
+		hk := w.profileHKs[t]
+		if hk == "" {
+			w.setButtonText(btn, "无")
+		} else {
+			w.setButtonText(btn, keyNameOfToken(hk))
+		}
 	}
-	w.keyLabels[1].SetVisible(seq)
-	w.keyCombos[1].SetVisible(seq)
-	w.keysRow34.SetVisible(seq)
+}
 
-	w.holdKeyCombo.SetEnabled(w.triggerCombo.CurrentIndex() == 1)
-	w.intervalEdit.SetEnabled(seq || kind == 0)
-
-	switch kind {
-	case actionSeqIdx:
-		w.setLabel(w.hintLabel, "序列：按间隔依次点击选中的键（最多 4 个，留空表示该位不参与）；间隔必填 20–600000")
-	case 2:
-		w.setLabel(w.hintLabel, "单点：每次触发开始时点击一次；间隔不必填")
-	case 3:
-		w.setLabel(w.hintLabel, "按住不放：触发期间保持按下，触发结束自动释放；间隔不必填")
+func (w *mainWindow) targetButton(tabIdx, slotIdx int) *walk.PushButton {
+	switch {
+	case slotIdx >= 0 && slotIdx < numSlots && tabIdx >= 0 && tabIdx < maxProfiles:
+		return w.slotKeyBtns[tabIdx][slotIdx]
+	case slotIdx == 100:
+		return w.toggleKeyBtn
+	case slotIdx == 101 && tabIdx >= 0 && tabIdx < maxProfiles:
+		return w.switchKeyBtns[tabIdx]
 	default:
-		w.setLabel(w.hintLabel, "连点：按间隔重复点击；间隔必填 20–600000")
+		return nil
 	}
+}
+
+func (w *mainWindow) handleGlobalKeyDown(key walk.Key) {
+	if w.capturingSlot < 0 {
+		return
+	}
+	vk := uint16(key)
+	if vk == 0x1B { // Escape: 取消录入
+		w.cancelCapture()
+		return
+	}
+
+	token := keys.Label(vk)
+	if token == "" {
+		return
+	}
+
+	t := w.capturingTab
+	s := w.capturingSlot
+	w.capturingTab = -1
+	w.capturingSlot = -1
+
+	switch {
+	case s >= 0 && s < numSlots && t >= 0 && t < maxProfiles:
+		w.profileSlots[t][s].Key = token
+		btn := w.slotKeyBtns[t][s]
+		w.setButtonText(btn, keyNameOfToken(token))
+	case s == 100:
+		w.raw.Toggle = token
+		w.setButtonText(w.toggleKeyBtn, keyNameOfToken(token))
+		w.refreshStatus()
+	case s == 101 && t >= 0 && t < maxProfiles:
+		w.profileHKs[t] = token
+		w.setButtonText(w.switchKeyBtns[t], keyNameOfToken(token))
+	}
+}
+
+func (w *mainWindow) setToggleKey(token string) {
+	w.cancelCapture()
+	w.raw.Toggle = token
+	w.setButtonText(w.toggleKeyBtn, keyNameOfToken(token))
+	w.refreshStatus()
+}
+
+func (w *mainWindow) setSlotKey(t, s int, token string) {
+	w.cancelCapture()
+	w.profileSlots[t][s].Key = token
+	w.setButtonText(w.slotKeyBtns[t][s], keyNameOfToken(token))
+}
+
+func (w *mainWindow) resetSlotKey(t, s int) {
+	w.cancelCapture()
+	slot := &w.profileSlots[t][s]
+	slot.Key = slot.DefaultKey
+	w.setButtonText(w.slotKeyBtns[t][s], keyNameOfToken(slot.Key))
+}
+
+func (w *mainWindow) clearSwitchKey(t int) {
+	w.cancelCapture()
+	w.profileHKs[t] = ""
+	w.setButtonText(w.switchKeyBtns[t], "无")
 }
 
 func (w *mainWindow) onGameChanged() {
@@ -504,254 +853,51 @@ func (w *mainWindow) onGameChanged() {
 	if id == w.app.settings.CurrentGame {
 		return
 	}
-	// 切换前先落盘当前编辑内容（仅当该游戏已有配置）；不合法则阻止切换
-	if w.app.st.snapshot().Raw != nil {
-		if err := w.saveToState(true); err != nil {
-			walk.MsgBox(w.mw, appName,
-				"当前配置不合法，未保存到「"+gameDisplayName(w.app.settings.CurrentGame)+"」：\n\n"+err.Error()+"\n\n请先修正，再切换游戏。",
-				walk.MsgBoxOK|walk.MsgBoxIconError)
-			w.loadFromState()
-			return
-		}
-	}
+
+	w.flushAllTabs()
+	_ = w.saveToState(true)
 	w.app.switchGame(id)
 }
 
-func (w *mainWindow) onToggleClicked() {
-	w.app.toggleFromUI()
-	w.refreshStatus()
-}
-
-func (w *mainWindow) onProfileChanged() {
-	if w.loading {
-		return
-	}
-	idx := w.profileCombo.CurrentIndex()
-	if idx < 0 || idx >= len(w.raw.Profiles) {
-		return
-	}
-	if idx == w.profileIdx {
-		w.setText(w.profileNameEdit, w.profile().Name)
-		return
-	}
-	// 切换方案前先落盘（含方案名、切换键与规则），不合法则留在原方案
-	w.flushProfile()
-	w.flushRule()
-	if err := w.saveToState(true); err != nil {
-		walk.MsgBox(w.mw, appName, "当前方案不合法，未保存也无法切换：\n\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
-		w.loadFromState()
-		return
-	}
-	w.profileIdx = idx
-	w.ruleIdx = 0
-	w.app.switchProfile(idx)
-	w.loadFromState()
-}
-
-func (w *mainWindow) onRuleChanged() {
-	if w.loading {
-		return
-	}
-	w.flushRule()
-	idx := w.ruleList.CurrentIndex()
-	if idx < 0 {
-		return
-	}
-	w.ruleIdx = idx
-	w.loadRuleFields()
-}
-
-func (w *mainWindow) onTriggerChanged() {
-	if !w.loading {
-		w.updateRuleFieldsState()
-	}
-}
-
-func (w *mainWindow) onActionChanged() {
-	if !w.loading {
-		w.updateRuleFieldsState()
-	}
-}
-
-func (w *mainWindow) flushProfile() {
-	if w.profileIdx < 0 || w.profileIdx >= len(w.raw.Profiles) {
-		return
-	}
-	w.raw.Profiles[w.profileIdx].Name = strings.TrimSpace(w.profileNameEdit.Text())
-	w.raw.Profiles[w.profileIdx].HK = comboTokenOf(w.switchCombo, w.switchItems)
-}
-
-func (w *mainWindow) flushRule() {
-	if w.profileIdx < 0 || w.profileIdx >= len(w.raw.Profiles) {
-		return
-	}
-	rules := w.profile().Rules
-	if w.ruleIdx < 0 || w.ruleIdx >= len(rules) {
-		return
-	}
-	r := &rules[w.ruleIdx]
-	if w.triggerCombo.CurrentIndex() == 1 {
-		r.Trigger = "h:" + comboTokenOf(w.holdKeyCombo, w.holdKeyItems)
-	} else {
-		r.Trigger = "t"
-	}
-	idx := w.actionCombo.CurrentIndex()
-	if idx < 0 || idx >= len(actionCodes) {
-		idx = 0
-	}
-	kind := actionCodes[idx]
-	arg := comboTokenOf(w.keyCombos[0], w.keyItems[0])
-	if kind == actionCodes[actionSeqIdx] {
-		parts := make([]string, 0, maxSeqKeys)
-		for i := 0; i < maxSeqKeys; i++ {
-			if tk := comboTokenOf(w.keyCombos[i], w.keyItems[i]); tk != "" {
-				parts = append(parts, tk)
-			}
-		}
-		arg = strings.Join(parts, ",")
-	}
-	r.Action = kind + ":" + arg
-	r.IntervalMS = parseInterval(w.intervalEdit.Text())
-}
-
-// flushAll 把界面上的全部编辑内容写回内存配置。
-func (w *mainWindow) flushAll() {
-	w.flushProfile()
-	w.flushRule()
-	w.raw.Version = config.Version
-	w.raw.Name = strings.TrimSpace(w.nameEdit.Text())
-	w.raw.Author = strings.TrimSpace(w.authorEdit.Text())
-	w.raw.Toggle = comboTokenOf(w.toggleCombo, w.toggleItems)
-}
-
-func parseInterval(s string) int {
-	n, err := strconv.Atoi(strings.TrimSpace(s))
-	if err != nil {
-		return 0
-	}
-	return n
-}
-
-func (w *mainWindow) addRule() {
-	w.flushRule()
-	p := w.profile()
-	if len(p.Rules) >= maxRules {
-		walk.MsgBox(w.mw, appName, fmt.Sprintf("每个方案最多 %d 条规则", maxRules), walk.MsgBoxOK|walk.MsgBoxIconInformation)
-		return
-	}
-	p.Rules = append(p.Rules, config.RawRule{Trigger: "t", Action: "tap:1", IntervalMS: 300})
-	w.ruleIdx = len(p.Rules) - 1
-	w.refreshRules()
-}
-
-func (w *mainWindow) deleteRule() {
-	w.flushRule()
-	p := w.profile()
-	if len(p.Rules) <= 1 {
-		walk.MsgBox(w.mw, appName, "每个方案至少要保留一条规则", walk.MsgBoxOK|walk.MsgBoxIconInformation)
-		return
-	}
-	if w.ruleIdx < 0 || w.ruleIdx >= len(p.Rules) {
-		return
-	}
-	p.Rules = append(p.Rules[:w.ruleIdx], p.Rules[w.ruleIdx+1:]...)
-	if w.ruleIdx >= len(p.Rules) {
-		w.ruleIdx = len(p.Rules) - 1
-	}
-	w.refreshRules()
-}
-
-func (w *mainWindow) addProfile() {
-	w.flushProfile()
-	w.flushRule()
-	if len(w.raw.Profiles) >= maxProfiles {
-		walk.MsgBox(w.mw, appName, fmt.Sprintf("最多 %d 个方案", maxProfiles), walk.MsgBoxOK|walk.MsgBoxIconInformation)
-		return
-	}
-	p := defaultProfile()
-	p.Name = fmt.Sprintf("方案 %d", len(w.raw.Profiles)+1)
-	w.raw.Profiles = append(w.raw.Profiles, p)
-	w.profileIdx = len(w.raw.Profiles) - 1
-	w.ruleIdx = 0
-	w.refreshProfiles()
-}
-
-// copyProfile 复制当前方案：规则深拷贝；切换键不随复制走，避免同键冲突。
-func (w *mainWindow) copyProfile() {
-	w.flushProfile()
-	w.flushRule()
-	if len(w.raw.Profiles) >= maxProfiles {
-		walk.MsgBox(w.mw, appName, fmt.Sprintf("最多 %d 个方案", maxProfiles), walk.MsgBoxOK|walk.MsgBoxIconInformation)
-		return
-	}
-	src := w.profile()
-	dst := config.RawProfile{Name: profileCopyName(src.Name), Rules: append([]config.RawRule{}, src.Rules...)}
-	w.raw.Profiles = append(w.raw.Profiles, dst)
-	w.profileIdx = len(w.raw.Profiles) - 1
-	w.ruleIdx = 0
-	w.refreshProfiles()
-	walk.MsgBox(w.mw, appName, "已复制为「"+dst.Name+"」。\n切换键不随复制走，需要的话请在新方案里单独设置。",
-		walk.MsgBoxOK|walk.MsgBoxIconInformation)
-}
-
-func (w *mainWindow) deleteProfile() {
-	w.flushProfile()
-	w.flushRule()
-	if len(w.raw.Profiles) <= 1 {
-		walk.MsgBox(w.mw, appName, "至少保留一个方案", walk.MsgBoxOK|walk.MsgBoxIconInformation)
-		return
-	}
-	name := w.profile().Name
-	if name == "" {
-		name = fmt.Sprintf("方案 %d", w.profileIdx+1)
-	}
-	if walk.MsgBox(w.mw, appName, "删除「"+name+"」？\n（点「保存并应用」后才写入磁盘）",
-		walk.MsgBoxYesNo|walk.MsgBoxIconQuestion) != walk.DlgCmdYes {
-		return
-	}
-	w.raw.Profiles = append(w.raw.Profiles[:w.profileIdx], w.raw.Profiles[w.profileIdx+1:]...)
-	if w.profileIdx >= len(w.raw.Profiles) {
-		w.profileIdx = len(w.raw.Profiles) - 1
-	}
-	w.ruleIdx = 0
-	w.refreshProfiles()
-}
-
-// profileCopyName 生成「名字-副本」形式的方案名，并按协议上限（24 字符）截断。
-func profileCopyName(src string) string {
-	base := strings.TrimSpace(src)
-	if base == "" {
-		base = "方案"
-	}
-	name := []rune(base + "-副本")
-	if len(name) > maxNameRunes {
-		name = name[:maxNameRunes]
-	}
-	return string(name)
-}
-
-// saveToState 校验并保存当前编辑内容；silent 为真时不弹成功后的注意提示。
 func (w *mainWindow) saveToState(silent bool) error {
-	w.flushAll()
+	w.flushAllTabs()
+
+	profs := make([]config.RawProfile, maxProfiles)
+	for i := 0; i < maxProfiles; i++ {
+		name := w.profileNames[i]
+		if name == "" {
+			name = fmt.Sprintf("配置 %d", i+1)
+		}
+		profs[i] = slotsToProfile(w.profileSlots[i], name, w.profileHKs[i])
+	}
+
+	w.raw.Version = config.Version
+	w.raw.Game = w.app.settings.CurrentGame
+	w.raw.Profiles = profs
+	if w.raw.Toggle == "" {
+		w.raw.Toggle = "F1"
+	}
+
 	raw := w.raw
 	parsed, err := config.Resolve(raw)
 	if err != nil {
 		return err
 	}
-	if err := w.app.setTargetProcess(w.app.settings.CurrentGame, strings.TrimSpace(w.procEdit.Text())); err != nil {
+
+	if err := w.app.applyConfig(&raw, parsed, w.profileIdx, w.startMode); err != nil {
 		return err
 	}
-	if err := w.app.applyConfig(&raw, parsed, w.profileIdx); err != nil {
-		return err
-	}
+
 	if !silent {
 		if warns := config.Warnings(parsed); len(warns) > 0 {
 			var sb strings.Builder
-			sb.WriteString("配置已保存，但有以下注意事项：\n\n")
+			sb.WriteString("配置已保存并生效，但有以下提示：\n\n")
 			for _, msg := range warns {
 				sb.WriteString("· " + msg + "\n")
 			}
 			walk.MsgBox(w.mw, appName, sb.String(), walk.MsgBoxOK|walk.MsgBoxIconWarning)
+		} else {
+			walk.MsgBox(w.mw, appName, "配置已成功保存并立即生效！\n\n进入游戏即可使用。", walk.MsgBoxOK|walk.MsgBoxIconInformation)
 		}
 	}
 	return nil
@@ -759,23 +905,205 @@ func (w *mainWindow) saveToState(silent bool) error {
 
 func (w *mainWindow) saveAndApply() {
 	if err := w.saveToState(false); err != nil {
-		walk.MsgBox(w.mw, appName, "配置不合法，未保存：\n\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
+		walk.MsgBox(w.mw, appName, "配置校验失败，未能保存：\n\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 		return
 	}
-	w.app.log.Printf("[窗口] 已保存并应用：%s（%s）", w.raw.Name, gameDisplayName(w.app.settings.CurrentGame))
+	w.refreshGlobalViews()
 }
 
 func (w *mainWindow) exportCode() {
-	w.flushAll()
+	w.flushAllTabs()
+
+	profs := make([]config.RawProfile, maxProfiles)
+	for i := 0; i < maxProfiles; i++ {
+		name := w.profileNames[i]
+		if name == "" {
+			name = fmt.Sprintf("配置 %d", i+1)
+		}
+		profs[i] = slotsToProfile(w.profileSlots[i], name, w.profileHKs[i])
+	}
+	w.raw.Profiles = profs
+
 	code, err := config.Encode(w.raw)
 	if err != nil {
-		walk.MsgBox(w.mw, appName, "配置不合法，无法导出：\n\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
+		walk.MsgBox(w.mw, appName, "生成分享码失败：\n\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 		return
 	}
 	if err := walk.Clipboard().SetText(code); err != nil {
 		walk.MsgBox(w.mw, appName, "写入剪贴板失败：\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 		return
 	}
-	w.app.log.Printf("[窗口] 已导出分享码（%d 字符）", len(code))
-	walk.MsgBox(w.mw, appName, "分享码已复制到剪贴板（"+strconv.Itoa(len(code))+" 字符）。", walk.MsgBoxOK|walk.MsgBoxIconInformation)
+	walk.MsgBox(w.mw, appName, "分享码已复制到剪贴板！可以直接发送给好友。", walk.MsgBoxOK|walk.MsgBoxIconInformation)
+}
+
+// 辅助方法
+func (w *mainWindow) fatal(err error) {
+	if w != nil && w.app != nil && w.app.log != nil {
+		w.app.log.Printf("[窗口] 界面操作失败：%v", err)
+	}
+	if w != nil && w.mw != nil {
+		walk.MsgBox(w.mw, appName, "界面操作失败：\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
+	}
+}
+
+func (w *mainWindow) setText(le *walk.LineEdit, s string) {
+	if le == nil {
+		return
+	}
+	_ = le.SetText(s)
+}
+
+func (w *mainWindow) setLabel(l *walk.Label, s string) {
+	if l == nil {
+		return
+	}
+	_ = l.SetText(s)
+}
+
+func (w *mainWindow) setButtonText(b *walk.PushButton, s string) {
+	if b == nil {
+		return
+	}
+	_ = b.SetText(s)
+}
+
+func (w *mainWindow) setCombo(cb *walk.ComboBox, items []string, idx int) {
+	if cb == nil {
+		return
+	}
+	_ = cb.SetModel(items)
+	if idx < 0 || idx >= len(items) {
+		idx = 0
+	}
+	if len(items) > 0 {
+		_ = cb.SetCurrentIndex(idx)
+	}
+}
+
+func profileToSlots(prof config.RawProfile) [numSlots]skillSlotData {
+	slots := defaultSlots()
+	usedSlots := make([]bool, numSlots)
+
+	for _, r := range prof.Rules {
+		kind, targetKey, _ := strings.Cut(r.Action, ":")
+		if targetKey == "" {
+			targetKey = r.Action
+		}
+
+		slotIdx := -1
+		for i := 0; i < numSlots; i++ {
+			if !usedSlots[i] && (strings.EqualFold(slots[i].DefaultKey, targetKey) || strings.EqualFold(slots[i].Key, targetKey)) {
+				slotIdx = i
+				break
+			}
+		}
+		if slotIdx == -1 {
+			for i := 0; i < numSlots; i++ {
+				if !usedSlots[i] && slots[i].Strategy == strategyDisabled {
+					slotIdx = i
+					break
+				}
+			}
+		}
+		if slotIdx == -1 {
+			continue
+		}
+
+		usedSlots[slotIdx] = true
+		slots[slotIdx].Key = targetKey
+		if r.IntervalMS > 0 {
+			slots[slotIdx].IntervalMS = r.IntervalMS
+		}
+
+		// 优先采用配置里显式声明的策略；v1 旧码没有该字段，按动作类型与间隔推断。
+		switch {
+		case r.Strategy != config.StrategyDisabled:
+			slots[slotIdx].Strategy = r.Strategy
+		default:
+			switch kind {
+			case "hold":
+				slots[slotIdx].Strategy = strategyHold
+			case "tap":
+				if r.IntervalMS == 300 {
+					slots[slotIdx].Strategy = strategyBuff
+				} else {
+					slots[slotIdx].Strategy = strategySpam
+				}
+			default:
+				slots[slotIdx].Strategy = strategySpam
+			}
+		}
+	}
+
+	return slots
+}
+
+// clampInterval 把间隔收敛到协议允许的范围；低于下限时按策略取兜底值。
+func clampInterval(v, fallback int) int {
+	if v < 20 {
+		return fallback
+	}
+	if v > 600000 {
+		return 600000
+	}
+	return v
+}
+
+func slotsToProfile(slots [numSlots]skillSlotData, name string, switchKey string) config.RawProfile {
+	rules := make([]config.RawRule, 0, numSlots)
+
+	for _, s := range slots {
+		if s.Strategy == strategyDisabled || s.Key == "" {
+			continue
+		}
+
+		switch s.Strategy {
+		case strategyHold: // 按住不放
+			rules = append(rules, config.RawRule{
+				Trigger:  "t",
+				Action:   "hold:" + s.Key,
+				Strategy: config.StrategyHold,
+			})
+		case strategySpam: // 连点
+			rules = append(rules, config.RawRule{
+				Trigger:    "t",
+				Action:     "tap:" + s.Key,
+				IntervalMS: clampInterval(s.IntervalMS, 20),
+				Strategy:   config.StrategySpam,
+			})
+		case strategyBuff: // 保持Buff：暗黑3 由屏幕守卫按需补放，其他游戏退化为定时续航
+			rules = append(rules, config.RawRule{
+				Trigger:    "t",
+				Action:     "tap:" + s.Key,
+				IntervalMS: clampInterval(s.IntervalMS, 300),
+				Strategy:   config.StrategyBuff,
+			})
+		}
+	}
+
+	if len(rules) == 0 {
+		rules = append(rules, config.RawRule{Trigger: "t", Action: "tap:1", IntervalMS: 250})
+	}
+
+	return config.RawProfile{
+		Name:  name,
+		HK:    switchKey,
+		Rules: rules,
+	}
+}
+
+func slotExplanation(s skillSlotData) string {
+	keyText := keyNameOfToken(s.Key)
+	switch s.Strategy {
+	case 0:
+		return "手动释放（不自动触发）"
+	case 1:
+		return fmt.Sprintf("持续保持按下「%s」（旋风斩/扫射/引导类技能专长）", keyText)
+	case 2:
+		return fmt.Sprintf("每 %dms 持续连点「%s」", s.IntervalMS, keyText)
+	case 3:
+		return fmt.Sprintf("智能屏幕找色保持「%s」Buff（发光环未结束绝不按键）", keyText)
+	default:
+		return ""
+	}
 }

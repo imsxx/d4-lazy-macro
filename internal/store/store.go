@@ -28,6 +28,7 @@ func ConfigFile(gameID string) string {
 type Snapshot struct {
 	Config     config.Raw `json:"config"`
 	ProfileIdx int        `json:"profile_index"`
+	StartMode  int        `json:"start_mode,omitempty"` // 0: 懒人模式(开关切换), 1: 仅按下时(按住生效)
 }
 
 // Settings 是工具级设置（不随分享码分发）。

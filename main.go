@@ -2,7 +2,8 @@
 
 // Diablo Lazy Macro 桌面执行器：主窗口 + 托盘常驻 + 全局热键 + 分享码导入/导出 + 日志。
 // 支持暗黑破坏神4 / 暗黑破坏神3 / 暗黑破坏神2：重制版，各自独立配置。
-// 三条红线：不读游戏内存、不注入进程、不加载驱动；只合成键鼠输入，并且仅在目标游戏位于前台时发送。
+// 唯一底线：不做无人值守的挂机与全自动打怪。
+// 技术约束：不读游戏内存、不注入进程、不加载驱动；只合成键鼠输入，屏幕识别仅用公开的截图/取色；仅在目标游戏位于前台时发送。
 package main
 
 import (
@@ -18,6 +19,7 @@ import (
 	"github.com/imsxx/diablo-lazy-macro/internal/config"
 	"github.com/imsxx/diablo-lazy-macro/internal/engine"
 	"github.com/imsxx/diablo-lazy-macro/internal/games"
+	"github.com/imsxx/diablo-lazy-macro/internal/keys"
 	"github.com/imsxx/diablo-lazy-macro/internal/logx"
 	"github.com/imsxx/diablo-lazy-macro/internal/store"
 	"github.com/imsxx/diablo-lazy-macro/internal/win32"
@@ -50,6 +52,7 @@ type runtimeSnapshot struct {
 	ToggleVK      uint16
 	GameID        string
 	TargetProcess string
+	StartMode     int // 0: 懒人模式 (开关切换), 1: 仅按下时 (按住生效)
 }
 
 // runtimeState 保存会被 UI 线程与 tick 线程并发访问的状态。
@@ -118,10 +121,6 @@ func newApp() (*app, error) {
 	if err != nil {
 		return nil, fmt.Errorf("创建基础窗口失败：%v", err)
 	}
-	ni, err := walk.NewNotifyIcon(mw)
-	if err != nil {
-		return nil, fmt.Errorf("创建托盘图标失败：%v", err)
-	}
 	dir, err := store.DefaultDir()
 	if err != nil {
 		return nil, err
@@ -129,6 +128,12 @@ func newApp() (*app, error) {
 	logger, err := logx.New(dir)
 	if err != nil {
 		return nil, err
+	}
+	var ni *walk.NotifyIcon
+	if iconObj, err := walk.NewNotifyIcon(mw); err == nil {
+		ni = iconObj
+	} else {
+		logger.Printf("[托盘] 创建托盘图标失败（将仅使用主窗口模式）：%v", err)
 	}
 	a := &app{mw: mw, ni: ni, dir: dir, log: logger, st: &runtimeState{}}
 	a.log.Printf("%s v%s 启动：%s/%s，数据目录 %s", appName, version, runtime.GOOS, runtime.GOARCH, dir)
@@ -139,8 +144,10 @@ func newApp() (*app, error) {
 		if err := a.mw.SetIcon(icon); err != nil {
 			a.log.Printf("[图标] 主窗口图标设置失败：%v", err)
 		}
-		if err := ni.SetIcon(icon); err != nil {
-			a.log.Printf("[图标] 托盘图标设置失败：%v", err)
+		if ni != nil {
+			if err := ni.SetIcon(icon); err != nil {
+				a.log.Printf("[图标] 托盘图标设置失败：%v", err)
+			}
 		}
 	} else {
 		a.icon = walk.IconApplication()
@@ -166,10 +173,12 @@ func newApp() (*app, error) {
 		return nil, err
 	}
 	a.refreshUI()
-	if err := ni.SetVisible(true); err != nil {
-		return nil, fmt.Errorf("显示托盘图标失败：%v", err)
+	if ni != nil {
+		if err := ni.SetVisible(true); err != nil {
+			a.log.Printf("[托盘] 显示图标失败：%v", err)
+		}
+		a.wireTrayClicks()
 	}
-	a.wireTrayClicks()
 	a.startTicker()
 
 	if err := a.createMainWindow(); err != nil {
@@ -185,8 +194,10 @@ func (a *app) run() int {
 			eng.ReleaseAll()
 		}
 		// 退出时托盘的消息窗口往往已随主窗口销毁，隐藏失败属预期，故只记一行、不打印 walk 的堆栈。
-		if err := a.ni.SetVisible(false); err != nil {
-			fmt.Fprintln(os.Stderr, "[托盘] 退出时隐藏图标失败（可忽略）")
+		if a.ni != nil {
+			if err := a.ni.SetVisible(false); err != nil {
+				fmt.Fprintln(os.Stderr, "[托盘] 退出时隐藏图标失败（可忽略）")
+			}
 		}
 		if err := a.log.Close(); err != nil {
 			fmt.Fprintln(os.Stderr, "[日志] 关闭失败：", err)
@@ -252,7 +263,17 @@ func (a *app) loadGame(gameID string) error {
 		return err
 	}
 	if snap != nil {
-		parsed, err := config.Resolve(snap.Config)
+		raw := snap.Config
+		// 旧版本存档就地升级：回填释放策略并提升版本号，保证「保持Buff」的屏幕守卫不丢失。
+		config.UpgradeLegacy(&raw)
+		for len(raw.Profiles) < 4 {
+			idx := len(raw.Profiles)
+			raw.Profiles = append(raw.Profiles, config.RawProfile{
+				Name:  fmt.Sprintf("配置 %d", idx+1),
+				Rules: []config.RawRule{{Trigger: "t", Action: "tap:1", IntervalMS: 250}},
+			})
+		}
+		parsed, err := config.Resolve(raw)
 		if err != nil {
 			return err
 		}
@@ -260,13 +281,34 @@ func (a *app) loadGame(gameID string) error {
 		if err != nil {
 			return err
 		}
-		if err := eng.SetProfile(snap.ProfileIdx); err != nil {
+		a.setupBuffChecker(eng)
+		profIdx := snap.ProfileIdx
+		if profIdx < 0 || profIdx >= len(parsed.Profiles) {
+			profIdx = 0
+		}
+		if err := eng.SetProfile(profIdx); err != nil {
 			return err
 		}
-		raw := snap.Config
+		eng.SetEnabled(true)
 		next.Engine = eng
 		next.Raw = &raw
 		next.ToggleVK = parsed.ToggleVK
+		next.StartMode = snap.StartMode
+	} else {
+		defRaw := defaultConfig()
+		defRaw.Game = gameID
+		parsed, err := config.Resolve(defRaw)
+		if err == nil {
+			if eng, err := engine.New(winSender{}, winKeyState{}, parsed, a.notifyEngineError); err == nil {
+				a.setupBuffChecker(eng)
+				_ = eng.SetProfile(0)
+				eng.SetEnabled(true)
+				next.Engine = eng
+				next.Raw = &defRaw
+				next.ToggleVK = parsed.ToggleVK
+				next.StartMode = 0
+			}
+		}
 	}
 
 	if old := a.st.snapshot(); old.Engine != nil {
@@ -306,6 +348,9 @@ func (a *app) switchGame(gameID string) {
 }
 
 func (a *app) rebuildMenu() error {
+	if a.ni == nil {
+		return nil
+	}
 	menu := a.ni.ContextMenu()
 	var buildErr error
 	check := func(err error) {
@@ -432,8 +477,10 @@ func (a *app) refreshUI() {
 		}
 		tip += fmt.Sprintf(" · %s · 方案：%s", stateText, profileDisplayName(snap.Engine, snap.Engine.ProfileIndex()))
 	}
-	if err := a.ni.SetToolTip(tip); err != nil {
-		a.log.Printf("[托盘] 设置提示失败：%v", err)
+	if a.ni != nil {
+		if err := a.ni.SetToolTip(tip); err != nil {
+			a.log.Printf("[托盘] 设置提示失败：%v", err)
+		}
 	}
 
 	if a.toggleAction != nil {
@@ -529,17 +576,34 @@ func (a *app) importFromClipboard() {
 	if walk.MsgBox(a.owner(), "导入分享码", sb.String(), walk.MsgBoxYesNo|walk.MsgBoxIconInformation) != walk.DlgCmdYes {
 		return
 	}
-	if err := a.applyConfig(raw, parsed, 0); err != nil {
+	// 确保导入的配置具备 4 个完整方案
+	for len(raw.Profiles) < 4 {
+		idx := len(raw.Profiles)
+		raw.Profiles = append(raw.Profiles, config.RawProfile{
+			Name:  fmt.Sprintf("配置 %d", idx+1),
+			Rules: []config.RawRule{{Trigger: "t", Action: "tap:1", IntervalMS: 250}},
+		})
+	}
+	parsed, err = config.Resolve(*raw)
+	if err != nil {
+		walk.MsgBox(a.owner(), appName, "配置校验失败：\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
+		return
+	}
+
+	startMode := a.st.snapshot().StartMode
+	if err := a.applyConfig(raw, parsed, 0, startMode); err != nil {
 		a.log.Printf("[导入] 应用失败：%v", err)
 		walk.MsgBox(a.owner(), appName, "应用配置失败：\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 		return
 	}
-	if err := a.ni.ShowInfo(appName, "配置已应用。\n进入游戏后按 "+keyName(parsed.ToggleVK)+" 启用宏。"); err != nil {
-		a.log.Printf("[托盘] 气泡提示失败：%v", err)
+	if a.ni != nil {
+		if err := a.ni.ShowInfo(appName, "配置已应用。\n进入游戏后按 "+keyName(parsed.ToggleVK)+" 启用宏。"); err != nil {
+			a.log.Printf("[托盘] 气泡提示失败：%v", err)
+		}
 	}
 }
 
-func (a *app) applyConfig(raw *config.Raw, parsed *config.Parsed, profileIdx int) error {
+func (a *app) applyConfig(raw *config.Raw, parsed *config.Parsed, profileIdx int, startMode int) error {
 	gameID := a.settings.CurrentGame
 	if raw.Game == "" {
 		raw.Game = gameID
@@ -552,17 +616,30 @@ func (a *app) applyConfig(raw *config.Raw, parsed *config.Parsed, profileIdx int
 	if err != nil {
 		return err
 	}
+	a.setupBuffChecker(eng)
 	if err := eng.SetProfile(profileIdx); err != nil {
 		return err
 	}
-	if err := store.Save(a.dir, store.ConfigFile(gameID), store.Snapshot{Config: *raw, ProfileIdx: profileIdx}); err != nil {
+	eng.SetEnabled(true)
+	if err := store.Save(a.dir, store.ConfigFile(gameID), store.Snapshot{
+		Config:     *raw,
+		ProfileIdx: profileIdx,
+		StartMode:  startMode,
+	}); err != nil {
 		return err
 	}
 	if old := a.st.snapshot(); old.Engine != nil {
 		old.Engine.SetEnabled(false)
 		old.Engine.ReleaseAll()
 	}
-	a.st.apply(runtimeSnapshot{Engine: eng, Raw: raw, ToggleVK: parsed.ToggleVK, GameID: gameID, TargetProcess: target})
+	a.st.apply(runtimeSnapshot{
+		Engine:        eng,
+		Raw:           raw,
+		ToggleVK:      parsed.ToggleVK,
+		GameID:        gameID,
+		TargetProcess: target,
+		StartMode:     startMode,
+	})
 	if err := a.rebuildMenu(); err != nil {
 		a.log.Printf("[错误] 重建菜单失败：%v", err)
 	}
@@ -583,7 +660,11 @@ func (a *app) switchProfile(i int) {
 		walk.MsgBox(a.owner(), appName, "切换方案失败：\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 		return
 	}
-	if err := store.Save(a.dir, store.ConfigFile(snap.GameID), store.Snapshot{Config: *snap.Raw, ProfileIdx: i}); err != nil {
+	if err := store.Save(a.dir, store.ConfigFile(snap.GameID), store.Snapshot{
+		Config:     *snap.Raw,
+		ProfileIdx: i,
+		StartMode:  snap.StartMode,
+	}); err != nil {
 		walk.MsgBox(a.owner(), appName, "方案已切换，但保存失败（下次启动会回到旧方案）：\n"+err.Error(),
 			walk.MsgBoxOK|walk.MsgBoxIconWarning)
 	}
@@ -608,8 +689,10 @@ func (a *app) exportToClipboard() {
 		return
 	}
 	a.log.Printf("[导出] 分享码已复制（%d 字符，%s）", len(code), gameDisplayName(snap.GameID))
-	if err := a.ni.ShowInfo(appName, "分享码已复制到剪贴板（"+strconv.Itoa(len(code))+" 字符）"); err != nil {
-		a.log.Printf("[托盘] 气泡提示失败：%v", err)
+	if a.ni != nil {
+		if err := a.ni.ShowInfo(appName, "分享码已复制到剪贴板（"+strconv.Itoa(len(code))+" 字符）"); err != nil {
+			a.log.Printf("[托盘] 气泡提示失败：%v", err)
+		}
 	}
 }
 
@@ -636,11 +719,24 @@ func (a *app) startTicker() {
 		for range ticker.C {
 			snap := a.st.snapshot()
 
-			pressed := snap.ToggleVK != 0 && win32.KeyPressed(snap.ToggleVK)
-			if pressed && !prevToggle && snap.Engine != nil {
-				a.log.Printf("[热键] %s → %s", keyName(snap.ToggleVK), onOffText(snap.Engine.Toggle()))
+			if snap.StartMode == 1 { // 仅按下时 (按住生效)
+				down := snap.ToggleVK != 0 && win32.KeyPressed(snap.ToggleVK)
+				if down != prevToggle && snap.Engine != nil {
+					snap.Engine.SetEnabled(down)
+					if down {
+						a.log.Printf("[按键] %s 按下 → 宏启动", keyName(snap.ToggleVK))
+					} else {
+						a.log.Printf("[按键] %s 松开 → 宏停止", keyName(snap.ToggleVK))
+					}
+				}
+				prevToggle = down
+			} else { // 懒人模式 (开关切换)
+				pressed := snap.ToggleVK != 0 && win32.KeyPressed(snap.ToggleVK)
+				if pressed && !prevToggle && snap.Engine != nil {
+					a.log.Printf("[热键] %s → %s", keyName(snap.ToggleVK), onOffText(snap.Engine.Toggle()))
+				}
+				prevToggle = pressed
 			}
-			prevToggle = pressed
 
 			if snap.Engine == nil {
 				continue
@@ -687,9 +783,54 @@ func (a *app) notifyEngineError(err error) {
 		return
 	}
 	a.mw.Synchronize(func() {
-		if showErr := a.ni.ShowError(appName, "按键发送失败：\n"+err.Error()); showErr != nil {
-			a.log.Printf("[托盘] 错误提示失败：%v", showErr)
+		if a.ni != nil {
+			if showErr := a.ni.ShowError(appName, "按键发送失败：\n"+err.Error()); showErr != nil {
+				a.log.Printf("[托盘] 错误提示失败：%v", showErr)
+			}
 		}
+	})
+}
+
+// setupBuffChecker 为引擎注入屏幕 Buff 状态检测器：入参为技能键，返回该键的 Buff 是否仍在生效。
+// 引擎只在声明了「保持Buff」策略的规则上调用它（并据此做优先级仲裁）；
+// 具体识别算法由游戏适配器提供（暗黑3 为发光环取色，其余游戏暂无守卫恒返回 false），
+// 通用层不再出现游戏标识判断。
+func (a *app) setupBuffChecker(eng *engine.Engine) {
+	if eng == nil {
+		return
+	}
+	eng.SetBuffChecker(func(vk uint16) bool {
+		snap := a.st.snapshot()
+		adapter, ok := games.For(snap.GameID)
+		if !ok {
+			return false
+		}
+		fg, err := win32.GetForegroundWindow()
+		if err != nil {
+			return false
+		}
+		if !win32.MatchProcess(fg.ProcessName, snap.TargetProcess) {
+			return false
+		}
+		if a.win == nil {
+			return false
+		}
+		profIdx := eng.ProfileIndex()
+		if profIdx < 0 || profIdx >= maxProfiles {
+			return false
+		}
+		slotIdx := -1
+		for s := 0; s < numSlots; s++ {
+			if parsedVK, err := keys.Parse(a.win.profileSlots[profIdx][s].Key); err == nil && parsedVK == vk {
+				slotIdx = s
+				break
+			}
+		}
+		if slotIdx < 0 {
+			return false
+		}
+		// 由游戏适配器判定该槽位技能的 Buff 是否仍在生效（无守卫的游戏恒为 false）。
+		return adapter.BuffActive(uintptr(fg.Handle), slotIdx, win32.Screen{})
 	})
 }
 
@@ -863,12 +1004,17 @@ func onOffText(on bool) string {
 	return "已关闭"
 }
 
-// defaultConfig 是新建配置的起手模板：一个方案、一条「每 300ms 连点一次 1」。
+// defaultConfig 是新建配置的起手模板：固定 4 个方案，开箱即用。
 func defaultConfig() config.Raw {
+	profs := make([]config.RawProfile, maxProfiles)
+	for i := 0; i < maxProfiles; i++ {
+		profs[i] = config.RawProfile{
+			Name:  fmt.Sprintf("配置 %d", i+1),
+			Rules: []config.RawRule{{Trigger: "t", Action: "tap:1", IntervalMS: 250}},
+		}
+	}
 	return config.Raw{
-		Version: config.Version,
-		Profiles: []config.RawProfile{
-			{Rules: []config.RawRule{{Trigger: "t", Action: "tap:1", IntervalMS: 300}}},
-		},
+		Version:  config.Version,
+		Profiles: profs,
 	}
 }

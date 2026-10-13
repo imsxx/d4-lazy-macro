@@ -1,37 +1,83 @@
-// Package games 定义支持的暗黑系列游戏，是协议标识、显示名与默认目标进程的唯一事实源。
+// Package games 定义受支持的暗黑系列游戏，是协议标识、显示名、默认目标进程与
+// 游戏差异化适配能力（槽位布局、屏幕 Buff 守卫）的唯一事实源。
+//
+// 约定：通用层（引擎、协议、存储、界面骨架）不得出现游戏标识判断；
+// 游戏差异一律通过本包的 Adapter 表达，避免特例渗入公共代码。
 package games
 
-// Game 描述一款受支持的游戏。
+// SlotDef 描述一个技能槽位的默认定义。
+type SlotDef struct {
+	Name       string // 界面显示名
+	DefaultKey string // 默认按键（协议键名）
+}
+
+// PixelSource 抽象屏幕取色与窗口几何，由 internal/win32 注入实现，便于单元测试。
+type PixelSource interface {
+	// ClientRect 返回窗口客户区的宽高与左上角屏幕绝对物理坐标。
+	ClientRect(hwnd uintptr) (w, h, originX, originY int32, ok bool)
+	// Pixel 返回屏幕绝对物理坐标 (x, y) 处的 RGB 分量。
+	Pixel(x, y int32) (r, g, b uint8, ok bool)
+}
+
+// Adapter 描述一款游戏的适配能力。
+type Adapter interface {
+	// ID 是协议标识（分享码 g 字段）。
+	ID() string
+	// Name 是界面显示名。
+	Name() string
+	// DefaultProcess 是默认目标进程名。
+	DefaultProcess() string
+	// Slots 返回技能槽位的默认定义（界面默认值与方案预设使用）。
+	Slots() []SlotDef
+	// BuffActive 报告指定槽位的技能 Buff 是否仍在生效；true 表示「仍在生效、不应抢按」。
+	// 无屏幕守卫的游戏恒返回 false。slotIdx 为槽位序号（0 起）。
+	BuffActive(hwnd uintptr, slotIdx int, px PixelSource) bool
+}
+
+// Game 是适配器的对外视图（协议与设置使用）。
 type Game struct {
 	ID             string // 协议标识（分享码 g 字段）
 	Name           string // 显示名
-	DefaultProcess string // 默认目标进程名（D4 已实测；D3/D2R 未实测，可在设置中覆盖）
+	DefaultProcess string // 默认目标进程名
 }
 
-var all = []Game{
-	{ID: "d4", Name: "暗黑破坏神4", DefaultProcess: "Diablo IV.exe"},
-	{ID: "d3", Name: "暗黑破坏神3", DefaultProcess: "Diablo III64.exe"},
-	{ID: "d2r", Name: "暗黑破坏神2：重制版", DefaultProcess: "D2R.exe"},
-}
+// adapters 是受支持游戏的唯一注册表；顺序即界面展示顺序，首个为默认游戏。
+var adapters = []Adapter{d4Adapter{}, d3Adapter{}, d2rAdapter{}}
 
 // All 返回全部受支持游戏（副本，避免外部修改内部表）。
 func All() []Game {
-	out := make([]Game, len(all))
-	copy(out, all)
+	out := make([]Game, 0, len(adapters))
+	for _, a := range adapters {
+		out = append(out, Game{ID: a.ID(), Name: a.Name(), DefaultProcess: a.DefaultProcess()})
+	}
 	return out
 }
 
 // Lookup 按协议标识查找游戏。
 func Lookup(id string) (Game, bool) {
-	for _, g := range all {
-		if g.ID == id {
-			return g, true
+	for _, a := range adapters {
+		if a.ID() == id {
+			return Game{ID: a.ID(), Name: a.Name(), DefaultProcess: a.DefaultProcess()}, true
 		}
 	}
 	return Game{}, false
 }
 
+// For 按协议标识取得游戏适配器。
+func For(id string) (Adapter, bool) {
+	for _, a := range adapters {
+		if a.ID() == id {
+			return a, true
+		}
+	}
+	return nil, false
+}
+
 // Default 返回默认游戏（暗黑破坏神4）。
 func Default() Game {
-	return all[0]
+	a := adapters[0]
+	return Game{ID: a.ID(), Name: a.Name(), DefaultProcess: a.DefaultProcess()}
 }
+
+// DefaultAdapter 返回默认游戏的适配器。
+func DefaultAdapter() Adapter { return adapters[0] }
