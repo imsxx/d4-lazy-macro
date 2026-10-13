@@ -99,8 +99,8 @@ const (
 type D3SalvageAnchor int
 
 const (
-	D3AnchorCenter D3SalvageAnchor = iota // 点击用：按钮中心
-	D3AnchorEdge                          // 取色用：按钮边缘（避开中心高光）
+	D3SalvageCenter D3SalvageAnchor = iota // 点击用：按钮中心
+	D3SalvageEdge                          // 取色用：按钮边缘（避开中心高光）
 )
 
 // 各品质按钮的基准坐标（3440x1440）。
@@ -116,9 +116,9 @@ func D3SalvageButtonXY(tier D3SalvageTier, anchor D3SalvageAnchor, winH int32) (
 	}
 	var src [2]float64
 	switch anchor {
-	case D3AnchorCenter:
+	case D3SalvageCenter:
 		src = d3SalvageCenter[tier]
-	case D3AnchorEdge:
+	case D3SalvageEdge:
 		src = d3SalvageEdge[tier]
 	default:
 		return 0, 0, false

@@ -81,19 +81,19 @@ func TestD3InventorySlotXYRejectsOutOfRange(t *testing.T) {
 
 func TestD3SalvageButtonXY(t *testing.T) {
 	// 基准分辨率下应等于基准值本身。
-	if x, y, ok := D3SalvageButtonXY(D3TierLegendary, D3AnchorCenter, 1440); !ok || x != 221 || y != 388 {
+	if x, y, ok := D3SalvageButtonXY(D3TierLegendary, D3SalvageCenter, 1440); !ok || x != 221 || y != 388 {
 		t.Errorf("中心锚点不符：got (%d,%d) ok=%v，want (221,388)", x, y, ok)
 	}
-	if x, y, ok := D3SalvageButtonXY(D3TierRare, D3AnchorEdge, 1440); !ok || x != 514 || y != 371 {
+	if x, y, ok := D3SalvageButtonXY(D3TierRare, D3SalvageEdge, 1440); !ok || x != 514 || y != 371 {
 		t.Errorf("边缘锚点不符：got (%d,%d) ok=%v，want (514,371)", x, y, ok)
 	}
-	if _, _, ok := D3SalvageButtonXY(D3SalvageTier(9), D3AnchorCenter, 1440); ok {
+	if _, _, ok := D3SalvageButtonXY(D3SalvageTier(9), D3SalvageCenter, 1440); ok {
 		t.Error("越界品质应被拒绝")
 	}
 	if _, _, ok := D3SalvageButtonXY(D3TierWhite, D3SalvageAnchor(9), 1440); ok {
 		t.Error("未知锚点应被拒绝")
 	}
-	if _, _, ok := D3SalvageButtonXY(D3TierWhite, D3AnchorCenter, 0); ok {
+	if _, _, ok := D3SalvageButtonXY(D3TierWhite, D3SalvageCenter, 0); ok {
 		t.Error("窗口高度为 0 应被拒绝")
 	}
 }
