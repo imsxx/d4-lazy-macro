@@ -18,6 +18,8 @@ const (
 	minDelayMS = 20
 	// randDelayFloorMS 是延迟随机的下限（对齐 D3keyHelper 的 Random(10, 延迟)）。
 	randDelayFloorMS = 10
+	// quickPauseClickInterval 是「暂停宏且连点左键」的点击节奏（对齐 D3keyHelper 的 50ms）。
+	quickPauseClickInterval = 50 * time.Millisecond
 )
 
 // Sender 负责实际合成输入（由 internal/win32 的实现注入）。
@@ -58,6 +60,13 @@ type Engine struct {
 	// 两者都为 0 表示未启用；玩家自己已按住该键时直接点击，不重复按下。
 	forceStandApply uint16
 	forceStandVK    uint16
+
+	// 快速暂停：暂停期间不发送任何规则按键；pauseClickVK != 0 时仍按固定节奏点击它。
+	// pauseUntil 为零值表示持续暂停（「压住」触发），直到 Resume 才恢复。
+	paused         bool
+	pauseUntil     time.Time
+	pauseClickVK   uint16
+	pauseNextClick time.Time
 
 	// randIntn 是延迟随机使用的随机源；默认 math/rand.Intn，测试可替换为确定性实现。
 	randIntn func(n int) int
@@ -129,6 +138,53 @@ func (e *Engine) SetForceStand(applyVK, modifierVK uint16) {
 	defer e.mu.Unlock()
 	e.forceStandApply = applyVK
 	e.forceStandVK = modifierVK
+}
+
+// QuickPause 暂停宏：d > 0 表示暂停 d 后自动恢复，d <= 0 表示一直暂停直到 Resume（「压住」触发）。
+// clickVK != 0 时，暂停期间以固定节奏继续点击该键（「暂停宏且连点左键」）。
+// now 由调用方（主循环）传入，便于测试。
+func (e *Engine) QuickPause(now time.Time, d time.Duration, clickVK uint16) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.paused = true
+	e.pauseClickVK = clickVK
+	e.pauseNextClick = time.Time{}
+	if d > 0 {
+		e.pauseUntil = now.Add(d)
+	} else {
+		e.pauseUntil = time.Time{}
+	}
+}
+
+// Resume 结束快速暂停。
+func (e *Engine) Resume() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.paused = false
+	e.pauseUntil = time.Time{}
+	e.pauseClickVK = 0
+}
+
+// Paused 返回是否处于快速暂停中。
+func (e *Engine) Paused() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.paused
+}
+
+// tickPausedLocked 处理暂停期间的行为：释放按住中的键、按需连点、到期自动恢复。
+func (e *Engine) tickPausedLocked(now time.Time) {
+	// 暂停期间不能留着按住不放的键，否则技能会一直按着。
+	e.releaseHoldsLocked()
+	if e.pauseClickVK != 0 && !now.Before(e.pauseNextClick) {
+		e.tapLocked(e.pauseClickVK)
+		e.pauseNextClick = now.Add(quickPauseClickInterval)
+	}
+	if !e.pauseUntil.IsZero() && !now.Before(e.pauseUntil) {
+		e.paused = false
+		e.pauseUntil = time.Time{}
+		e.pauseClickVK = 0
+	}
 }
 
 // Toggle 切换总开关并返回新状态。
@@ -210,6 +266,10 @@ func (e *Engine) releaseHoldsLocked() {
 func (e *Engine) Tick(now time.Time, foreground bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.paused {
+		e.tickPausedLocked(now)
+		return
+	}
 	if e.mode == config.ModeSequential {
 		e.tickSequentialLocked(now, foreground)
 		return

@@ -52,6 +52,49 @@ func TestGameKeysRejectsUnknownGame(t *testing.T) {
 	}
 }
 
+func TestQuickPauseValidation(t *testing.T) {
+	s := DefaultSettings()
+	if err := s.Validate(); err != nil {
+		t.Fatalf("默认快速暂停设置应当合法：%v", err)
+	}
+
+	s.QuickPause = DefaultQuickPause()
+	s.QuickPause.Trigger = 9
+	if err := s.Validate(); err == nil {
+		t.Fatal("非法触发方式应当被拒绝")
+	}
+
+	s.QuickPause = DefaultQuickPause()
+	s.QuickPause.MouseKey = 0
+	if err := s.Validate(); err == nil {
+		t.Fatal("非法鼠标键应当被拒绝")
+	}
+
+	s.QuickPause = DefaultQuickPause()
+	s.QuickPause.Action = 7
+	if err := s.Validate(); err == nil {
+		t.Fatal("非法行为取值应当被拒绝")
+	}
+
+	s.QuickPause = DefaultQuickPause()
+	s.QuickPause.DelayMS = 100
+	if err := s.Validate(); err == nil {
+		t.Fatal("超出范围的暂停时长应当被拒绝")
+	}
+}
+
+func TestSettingsApplyDefaults(t *testing.T) {
+	// 旧存档没有 quick_pause 字段，解析后是零值：必须先补齐默认值，否则校验必然失败。
+	var s Settings
+	s.applyDefaults()
+	if err := s.Validate(); err != nil {
+		t.Fatalf("补齐默认值后应当合法：%v", err)
+	}
+	if s.QuickPause.Trigger != DefaultQuickPause().Trigger || s.CurrentGame == "" {
+		t.Fatalf("默认值未补齐：%+v", s)
+	}
+}
+
 func TestSaveLoadRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	in := sampleSnapshot()

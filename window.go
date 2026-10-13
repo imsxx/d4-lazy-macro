@@ -334,6 +334,7 @@ func (a *app) createMainWindow() error {
 										},
 									},
 									decl.PushButton{Text: "📄 查看运行日志", MinSize: decl.Size{Height: 26}, OnClicked: a.showLogWindow},
+									decl.PushButton{Text: "⚙ 更多设置（快速暂停等）", MinSize: decl.Size{Height: 26}, OnClicked: w.openExtraSettings},
 								},
 							},
 							decl.VSpacer{},
@@ -1092,6 +1093,109 @@ func (w *mainWindow) applyForceStandSettings(gk store.GameKeys) {
 		state = "开启"
 	}
 	w.app.log.Printf("[设置] %s 左键自动站立：%s（键 %s）", gameDisplayName(gameID), state, w.forceStandKeyName())
+}
+
+// 快速暂停的界面下拉选项（下标 +1 即协议取值）。
+var (
+	quickPauseTriggerNames = []string{"双击", "单击", "压住"}
+	quickPauseMouseNames   = []string{"左键", "右键", "中键", "侧键1", "侧键2"}
+	quickPauseActionNames  = []string{"暂停按键宏", "暂停宏且连点左键"}
+)
+
+// settingsDlg 承载「更多设置」对话框的控件引用。
+type settingsDlg struct {
+	dlg *walk.Dialog
+
+	quickPauseCheck    *walk.CheckBox
+	quickPauseTrigger  *walk.ComboBox
+	quickPauseMouseKey *walk.ComboBox
+	quickPauseAction   *walk.ComboBox
+	quickPauseDelay    *walk.LineEdit
+}
+
+// openExtraSettings 打开「更多设置」对话框。
+// 这里放的是操作习惯类设置：不属于分享码内容，改动后立即生效并落盘。
+func (w *mainWindow) openExtraSettings() {
+	d := &settingsDlg{}
+	qp := w.app.settings.QuickPause
+
+	dlg := decl.Dialog{
+		AssignTo: &d.dlg,
+		Title:    "更多设置",
+		MinSize:  decl.Size{Width: 470, Height: 235},
+		Layout:   decl.VBox{Margins: decl.Margins{Left: 12, Top: 10, Right: 12, Bottom: 10}, Spacing: 8},
+		Children: []decl.Widget{
+			decl.GroupBox{
+				Title:  "快速暂停",
+				Layout: decl.VBox{Margins: decl.Margins{Left: 10, Top: 8, Right: 10, Bottom: 8}, Spacing: 8},
+				Children: []decl.Widget{
+					decl.CheckBox{
+						AssignTo:    &d.quickPauseCheck,
+						Text:        "启用快速暂停（按鼠标键临时停手，再按一下恢复）",
+						Checked:     qp.Enabled,
+						ToolTipText: "暂停期间不发送任何技能按键，并立即释放按住中的键",
+					},
+					decl.Composite{
+						Layout: decl.HBox{MarginsZero: true, Spacing: 6},
+						Children: []decl.Widget{
+							decl.Label{Text: "鼠标"},
+							decl.ComboBox{AssignTo: &d.quickPauseTrigger, Model: quickPauseTriggerNames, CurrentIndex: qp.Trigger - 1, MinSize: decl.Size{Width: 62}, MaxSize: decl.Size{Width: 62}},
+							decl.ComboBox{AssignTo: &d.quickPauseMouseKey, Model: quickPauseMouseNames, CurrentIndex: qp.MouseKey - 1, MinSize: decl.Size{Width: 70}, MaxSize: decl.Size{Width: 70}},
+							decl.Label{Text: "则"},
+							decl.ComboBox{AssignTo: &d.quickPauseAction, Model: quickPauseActionNames, CurrentIndex: qp.Action - 1, MinSize: decl.Size{Width: 148}, MaxSize: decl.Size{Width: 148}},
+							decl.HSpacer{},
+						},
+					},
+					decl.Composite{
+						Layout: decl.HBox{MarginsZero: true, Spacing: 6},
+						Children: []decl.Widget{
+							decl.Label{Text: "单击 / 双击模式的暂停时长："},
+							decl.LineEdit{AssignTo: &d.quickPauseDelay, Text: strconv.Itoa(qp.DelayMS), MinSize: decl.Size{Width: 60}, MaxSize: decl.Size{Width: 60}},
+							decl.Label{Text: "毫秒（500–5000）"},
+							decl.HSpacer{},
+						},
+					},
+				},
+			},
+			decl.Composite{
+				Layout: decl.HBox{MarginsZero: true, Spacing: 8},
+				Children: []decl.Widget{
+					decl.HSpacer{},
+					decl.PushButton{Text: "确定", MinSize: decl.Size{Width: 80, Height: 28}, MaxSize: decl.Size{Width: 80, Height: 28}, OnClicked: func() { d.save(w) }},
+					decl.PushButton{Text: "取消", MinSize: decl.Size{Width: 80, Height: 28}, MaxSize: decl.Size{Width: 80, Height: 28}, OnClicked: func() { d.dlg.Close(0) }},
+				},
+			},
+		},
+	}
+	if err := dlg.Create(w.mw); err != nil {
+		w.fatal(err)
+		return
+	}
+	d.dlg.Run()
+}
+
+// save 把对话框内容落盘并立即生效。
+func (d *settingsDlg) save(w *mainWindow) {
+	qp := store.QuickPauseSettings{
+		Enabled:  d.quickPauseCheck.Checked(),
+		Trigger:  d.quickPauseTrigger.CurrentIndex() + 1,
+		MouseKey: d.quickPauseMouseKey.CurrentIndex() + 1,
+		Action:   d.quickPauseAction.CurrentIndex() + 1,
+		DelayMS:  parseIntField(d.quickPauseDelay, store.QuickPauseMinDelayMS, store.QuickPauseMaxDelayMS, store.DefaultQuickPause().DelayMS),
+	}
+	w.app.settings.QuickPause = qp
+	if err := store.SaveSettings(w.app.dir, *w.app.settings); err != nil {
+		w.fatal(err)
+		return
+	}
+	w.app.updateQuickPause(qp)
+	state := "关闭"
+	if qp.Enabled {
+		state = "开启"
+	}
+	w.app.log.Printf("[设置] 快速暂停：%s（鼠标%s + %s → %s）", state,
+		quickPauseTriggerNames[qp.Trigger-1], quickPauseMouseNames[qp.MouseKey-1], quickPauseActionNames[qp.Action-1])
+	d.dlg.Close(0)
 }
 
 func (w *mainWindow) setToggleKey(token string) {

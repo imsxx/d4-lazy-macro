@@ -387,3 +387,87 @@ func TestForceStandDisabledDoesNothing(t *testing.T) {
 	e.Tick(base, true)
 	expectEvents(t, sender, "tap:LMB")
 }
+
+func TestQuickPauseStopsSendingAndAutoResumes(t *testing.T) {
+	// 暂停期间不发送规则按键；到期后自动恢复。
+	e, sender, _, _ := newTestEngine(t, []config.ParsedRule{
+		{Kind: config.ActionTap, Keys: []uint16{0x31}, IntervalMS: 100},
+	})
+	e.SetEnabled(true)
+	e.Tick(base, true)
+	expectEvents(t, sender, "tap:1")
+
+	e.QuickPause(base.Add(10*time.Millisecond), 200*time.Millisecond, 0)
+	if !e.Paused() {
+		t.Fatal("应当处于暂停状态")
+	}
+	e.Tick(base.Add(100*time.Millisecond), true)
+	e.Tick(base.Add(150*time.Millisecond), true)
+	expectEvents(t, sender, "tap:1") // 暂停期间不再发送
+
+	// 暂停起点 10ms + 200ms = 210ms 到期，自动恢复
+	e.Tick(base.Add(210*time.Millisecond), true)
+	if e.Paused() {
+		t.Fatal("到期后应当自动恢复")
+	}
+	e.Tick(base.Add(300*time.Millisecond), true)
+	expectEvents(t, sender, "tap:1", "tap:1")
+}
+
+func TestQuickPauseReleasesHeldKeys(t *testing.T) {
+	// 暂停时「按住不放」的技能必须立即释放，否则技能会一直按着。
+	e, sender, _, _ := newTestEngine(t, []config.ParsedRule{
+		{Kind: config.ActionHold, Keys: []uint16{0x02}},
+	})
+	e.SetEnabled(true)
+	e.Tick(base, true)
+	expectEvents(t, sender, "down:RMB")
+
+	e.QuickPause(base, 0, 0) // 持续暂停
+	e.Tick(base.Add(10*time.Millisecond), true)
+	expectEvents(t, sender, "down:RMB", "up:RMB")
+}
+
+func TestQuickPauseClicksLeftButton(t *testing.T) {
+	// 「暂停宏且连点左键」：暂停期间以 50ms 节奏继续点击左键。
+	e, sender, _, _ := newTestEngine(t, []config.ParsedRule{
+		{Kind: config.ActionTap, Keys: []uint16{0x31}, IntervalMS: 100},
+	})
+	e.SetEnabled(true)
+	e.QuickPause(base, 0, 0x01)
+	e.Tick(base.Add(10*time.Millisecond), true)
+	expectEvents(t, sender, "tap:LMB")
+	e.Tick(base.Add(30*time.Millisecond), true)
+	expectEvents(t, sender, "tap:LMB") // 未到 50ms
+	e.Tick(base.Add(60*time.Millisecond), true)
+	expectEvents(t, sender, "tap:LMB", "tap:LMB")
+}
+
+func TestQuickPauseResumeReturnsToRules(t *testing.T) {
+	e, sender, _, _ := newTestEngine(t, []config.ParsedRule{
+		{Kind: config.ActionTap, Keys: []uint16{0x31}, IntervalMS: 100},
+	})
+	e.SetEnabled(true)
+	e.QuickPause(base, 0, 0x01)
+	e.Tick(base.Add(10*time.Millisecond), true)
+	expectEvents(t, sender, "tap:LMB")
+
+	e.Resume()
+	if e.Paused() {
+		t.Fatal("Resume 后不应仍处于暂停")
+	}
+	e.Tick(base.Add(60*time.Millisecond), true)
+	expectEvents(t, sender, "tap:LMB", "tap:1") // 恢复后回到规则触发
+}
+
+func TestQuickPauseClicksUseForceStand(t *testing.T) {
+	// 暂停期间连点左键同样走强制站立包裹（暗黑3 左键既是移动又是主要技能）。
+	e, sender, _, _ := newTestEngine(t, []config.ParsedRule{
+		{Kind: config.ActionTap, Keys: []uint16{0x31}, IntervalMS: 100},
+	})
+	e.SetForceStand(0x01, 0xA0)
+	e.SetEnabled(true)
+	e.QuickPause(base, 0, 0x01)
+	e.Tick(base.Add(10*time.Millisecond), true)
+	expectEvents(t, sender, "down:LSHIFT", "tap:LMB", "up:LSHIFT")
+}
