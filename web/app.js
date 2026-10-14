@@ -131,6 +131,11 @@ function renderAll() {
   renderHelperSection();
   renderPreferences();
   renderStatusAndHeader();
+
+  // 通知宿主窗口：首帧深色界面已完整装配就绪，可平滑显示，避免白屏闪烁
+  if (typeof window.api_ready === 'function') {
+    window.api_ready();
+  }
 }
 
 // 渲染顶栏游戏按钮与快捷键

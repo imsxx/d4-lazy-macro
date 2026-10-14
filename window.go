@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
+	"unsafe"
 
 	"github.com/imsxx/diablo-lazy-macro/internal/config"
 	"github.com/imsxx/diablo-lazy-macro/internal/games"
@@ -23,16 +25,25 @@ var webAssets embed.FS
 
 var (
 	user32DLL            = windows.NewLazySystemDLL("user32.dll")
-	procShowWindow       = user32DLL.NewProc("ShowWindow")
-	procSetForeground    = user32DLL.NewProc("SetForegroundWindow")
-	procSetWindowLongPtr = user32DLL.NewProc("SetWindowLongPtrW")
-	procCallWindowProc   = user32DLL.NewProc("CallWindowProcW")
-	procGetWindowLong    = user32DLL.NewProc("GetWindowLongW")
-	procSetWindowLong    = user32DLL.NewProc("SetWindowLongW")
-	procSetWindowPos     = user32DLL.NewProc("SetWindowPos")
-	procReleaseCapture   = user32DLL.NewProc("ReleaseCapture")
-	procSendMessageW     = user32DLL.NewProc("SendMessageW")
-	procSetFocus         = user32DLL.NewProc("SetFocus")
+	kernel32DLL          = windows.NewLazySystemDLL("kernel32.dll")
+	dwmDLL               = windows.NewLazySystemDLL("dwmapi.dll")
+
+	procShowWindow          = user32DLL.NewProc("ShowWindow")
+	procSetForeground       = user32DLL.NewProc("SetForegroundWindow")
+	procSetWindowLongPtr    = user32DLL.NewProc("SetWindowLongPtrW")
+	procCallWindowProc      = user32DLL.NewProc("CallWindowProcW")
+	procGetWindowLong       = user32DLL.NewProc("GetWindowLongW")
+	procSetWindowLong       = user32DLL.NewProc("SetWindowLongW")
+	procSetWindowPos        = user32DLL.NewProc("SetWindowPos")
+	procReleaseCapture      = user32DLL.NewProc("ReleaseCapture")
+	procSendMessageW        = user32DLL.NewProc("SendMessageW")
+	procSetFocus            = user32DLL.NewProc("SetFocus")
+	procGetSystemMetrics    = user32DLL.NewProc("GetSystemMetrics")
+	procSetWindowsHookExW   = user32DLL.NewProc("SetWindowsHookExW")
+	procUnhookWindowsHookEx = user32DLL.NewProc("UnhookWindowsHookEx")
+	procCallNextHookEx      = user32DLL.NewProc("CallNextHookEx")
+	procGetCurrentThreadId  = kernel32DLL.NewProc("GetCurrentThreadId")
+	procDwmSetWindowAttribute = dwmDLL.NewProc("DwmSetWindowAttribute")
 )
 
 const (
@@ -66,7 +77,34 @@ const (
 	WM_MOUSEACTIVATE = 0x0021
 	MA_ACTIVATE      = 1
 	WM_SETFOCUS      = 0x0007
+
+	WH_CBT                        = 5
+	HCBT_CREATEWND                = 3
+	SM_CXSCREEN                   = 0
+	SM_CYSCREEN                   = 1
+	DWMWA_USE_IMMERSIVE_DARK_MODE = 20
 )
+
+type cbtCreateWnd struct {
+	lpcs            *createStruct
+	hwndInsertAfter uintptr
+}
+
+type createStruct struct {
+	lpCreateParams uintptr
+	hInstance      uintptr
+	hMenu          uintptr
+	hwndParent     uintptr
+	cy             int32
+	cx             int32
+	y              int32
+	x              int32
+	style          int32
+	lpszName       *uint16
+	lpszClass      *uint16
+	dwExStyle      uint32
+}
+
 
 const (
 	strategyDisabled = config.StrategyDisabled
@@ -168,6 +206,7 @@ type mainWindow struct {
 
 	hiddenHintShown bool
 	quitting        bool
+	shown           bool
 }
 
 func (a *app) createMainWindow() error {
@@ -192,6 +231,30 @@ func (a *app) createMainWindow() error {
 	fullHtml = strings.Replace(fullHtml, `<link rel="stylesheet" href="style.css">`, "<style>"+string(cssBytes)+"</style>", 1)
 	fullHtml = strings.Replace(fullHtml, `<script src="app.js"></script>`, "<script>"+string(jsBytes)+"</script>", 1)
 
+	// 安装临时 CBT 钩子：在 CreateWindowExW 触发时直接剥除原生标题栏并移出屏幕可视范围，
+	// 彻底消除启动时 Windows 原生白屏与标题栏的闪烁
+	var hook uintptr
+	hookCallback := windows.NewCallback(func(nCode int32, wp uintptr, lp unsafe.Pointer) uintptr {
+		if nCode == HCBT_CREATEWND && lp != nil {
+			cbt := (*cbtCreateWnd)(lp)
+			if cbt.lpcs != nil {
+				cbt.lpcs.style &^= (WS_CAPTION | WS_THICKFRAME | WS_MAXIMIZEBOX)
+				cbt.lpcs.x = -32000
+				cbt.lpcs.y = -32000
+			}
+		}
+		r, _, _ := procCallNextHookEx.Call(hook, uintptr(nCode), wp, uintptr(lp))
+		return r
+	})
+
+	tid, _, _ := procGetCurrentThreadId.Call()
+	hook, _, _ = procSetWindowsHookExW.Call(
+		uintptr(WH_CBT),
+		hookCallback,
+		0,
+		tid,
+	)
+
 	// 创建 WebView2 窗口
 	wv := webview2.NewWithOptions(webview2.WebViewOptions{
 		Debug:     false,
@@ -201,9 +264,13 @@ func (a *app) createMainWindow() error {
 			Width:  fixedWinWidth,
 			Height: fixedWinHeight,
 			IconId: 1,
-			Center: true,
+			Center: false,
 		},
 	})
+
+	if hook != 0 {
+		procUnhookWindowsHookEx.Call(hook)
+	}
 	if wv == nil {
 		return fmt.Errorf("初始化 WebView2 运行时失败，请确认系统已安装 Edge WebView2 运行时")
 	}
@@ -214,6 +281,10 @@ func (a *app) createMainWindow() error {
 	w.hwnd = uintptr(wv.Window())
 	a.win = w
 
+	// 启用 DWM 暗黑模式浸润
+	darkMode := int32(1)
+	procDwmSetWindowAttribute.Call(w.hwnd, uintptr(DWMWA_USE_IMMERSIVE_DARK_MODE), uintptr(unsafe.Pointer(&darkMode)), 4)
+
 	w.removeSystemTitlebar()
 	w.subclass()
 	w.initBindings()
@@ -221,6 +292,13 @@ func (a *app) createMainWindow() error {
 	wv.SetHtml(fullHtml)
 
 	w.loadFromState()
+
+	// 兜底定时器：若前端 ready 信号延迟，超时自动平滑显示居中
+	time.AfterFunc(600*time.Millisecond, func() {
+		w.app.sync(func() {
+			w.showCentered()
+		})
+	})
 
 	a.log.Printf("[窗口] 现代 WebView2 电竞 UI 初始化完成（固定尺寸 %dx%d）", fixedWinWidth, fixedWinHeight)
 	return nil
@@ -242,8 +320,37 @@ func (w *mainWindow) removeSystemTitlebar() {
 		0, 0,
 		uintptr(fixedWinWidth),
 		uintptr(fixedWinHeight),
-		uintptr(SWP_NOMOVE|SWP_NOZORDER|SWP_FRAMECHANGED|SWP_SHOWWINDOW),
+		uintptr(SWP_NOMOVE|SWP_NOZORDER|SWP_FRAMECHANGED),
 	)
+}
+
+func (w *mainWindow) showCentered() {
+	if w.shown || w.hwnd == 0 {
+		return
+	}
+	w.shown = true
+
+	screenW, _, _ := procGetSystemMetrics.Call(uintptr(SM_CXSCREEN))
+	screenH, _, _ := procGetSystemMetrics.Call(uintptr(SM_CYSCREEN))
+	centerX := (int32(screenW) - fixedWinWidth) / 2
+	centerY := (int32(screenH) - fixedWinHeight) / 2
+	if centerX < 0 {
+		centerX = 0
+	}
+	if centerY < 0 {
+		centerY = 0
+	}
+
+	procSetWindowPos.Call(
+		w.hwnd,
+		0,
+		uintptr(centerX),
+		uintptr(centerY),
+		uintptr(fixedWinWidth),
+		uintptr(fixedWinHeight),
+		uintptr(SWP_NOZORDER|SWP_FRAMECHANGED|SWP_SHOWWINDOW),
+	)
+	procSetForeground.Call(w.hwnd)
 }
 
 func (w *mainWindow) subclass() {
@@ -427,6 +534,11 @@ func (w *mainWindow) initBindings() {
 		return nil
 	})
 
+	_ = w.wv.Bind("api_ready", func() error {
+		w.showCentered()
+		return nil
+	})
+
 	_ = w.wv.Bind("api_close", func() error {
 		procShowWindow.Call(w.hwnd, uintptr(SW_HIDE))
 		if !w.hiddenHintShown {
@@ -537,6 +649,7 @@ func (a *app) showMainWindow() {
 		}
 	}
 	if a.win.hwnd != 0 {
+		a.win.showCentered()
 		procShowWindow.Call(a.win.hwnd, uintptr(SW_SHOW))
 		procSetForeground.Call(a.win.hwnd)
 		a.win.refreshStatus()
