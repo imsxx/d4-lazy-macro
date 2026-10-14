@@ -10,7 +10,6 @@
   <!-- 顶栏：自定义无边框拖拽标题栏 + 窗口控制 -->
   <header class="app-header" id="appHeader">
     <div class="header-brand">
-      <span class="brand-badge">DLM</span>
       <span class="brand-title">暗黑懒人宏</span>
       <span class="brand-version" id="appVersion">v0.2.0</span>
     </div>
@@ -20,6 +19,12 @@
       <button class="game-btn active" data-game="d3" onclick="switchGame('d3')">暗黑破坏神 3</button>
       <button class="game-btn" data-game="d4" onclick="switchGame('d4')">暗黑破坏神 4</button>
       <button class="game-btn" data-game="d2r" onclick="switchGame('d2r')">暗黑 2：重制版</button>
+    </div>
+
+    <!-- 全局战斗宏启动快捷键 (通用全局控件) -->
+    <div class="header-macro-toggle">
+      <span class="header-macro-label">战斗宏启停快捷键：</span>
+      <button class="keycap-btn highlight header-keycap" id="toggleKeyBtn" onclick="captureToggleKey()" title="点击修改战斗宏启停快捷键">X1</button>
     </div>
 
     <!-- 快捷工具按钮组 -->
@@ -38,31 +43,32 @@
   <main class="app-main">
     <!-- ================= 左栏：技能方案工作区 ================= -->
     <section class="column-left">
-      <!-- 方案 Tab 导航 -->
-      <div class="profile-tabs">
-        <button class="tab-btn active" data-tab="0" onclick="switchTab(0)">配置 1</button>
-        <button class="tab-btn" data-tab="1" onclick="switchTab(1)">配置 2</button>
-        <button class="tab-btn" data-tab="2" onclick="switchTab(2)">配置 3</button>
-        <button class="tab-btn" data-tab="3" onclick="switchTab(3)">配置 4</button>
-      </div>
-
-      <!-- 按键宏设置卡片 -->
-      <div class="card macro-card">
-        <div class="card-title">按键宏设置</div>
-        
-        <!-- 表头行 -->
-        <div class="slot-header">
-          <span class="col-slot">技能槽位</span>
-          <span class="col-key">快捷键</span>
-          <span class="col-strategy">释放策略</span>
-          <span class="col-interval">执行间隔 (ms)</span>
-          <span class="col-delay">延迟 (ms)</span>
-          <span class="col-random">±随机</span>
+      <!-- 方案设置工作区 (Tab标签与配置卡片一体化连接) -->
+      <div class="macro-section">
+        <!-- 方案 Tab 导航 (紧密咬合下方卡片，无任何断开线) -->
+        <div class="profile-tabs">
+          <button class="tab-btn active" data-tab="0" onclick="switchTab(0)">配置 1</button>
+          <button class="tab-btn" data-tab="1" onclick="switchTab(1)">配置 2</button>
+          <button class="tab-btn" data-tab="2" onclick="switchTab(2)">配置 3</button>
+          <button class="tab-btn" data-tab="3" onclick="switchTab(3)">配置 4</button>
         </div>
 
-        <!-- 6 行槽位容器 (动态渲染) -->
-        <div class="slot-list" id="slotList">
-          <!-- 由 JS 渲染 6 行槽位 -->
+        <!-- 按键宏设置卡片 -->
+        <div class="card macro-card">
+          <!-- 表头行 -->
+          <div class="slot-header">
+            <span class="col-slot">技能槽位</span>
+            <span class="col-key">快捷键</span>
+            <span class="col-strategy">释放策略</span>
+            <span class="col-interval">执行间隔 (ms)</span>
+            <span class="col-delay">延迟 (ms)</span>
+            <span class="col-random">±随机</span>
+          </div>
+
+          <!-- 6 行槽位容器 (动态渲染) -->
+          <div class="slot-list" id="slotList">
+            <!-- 由 JS 渲染 6 行槽位 -->
+          </div>
         </div>
       </div>
 
@@ -80,7 +86,7 @@
           </div>
           <div class="form-item">
             <span class="form-label">按键模式：</span>
-            <select class="select-dropdown sm" id="profileModeSelect" onchange="saveProfileMode()">
+            <select class="select-dropdown md" id="profileModeSelect" onchange="saveProfileMode()">
               <option value="concurrent">并发按键</option>
               <option value="sequential">循环按键</option>
             </select>
@@ -90,7 +96,7 @@
         <div class="extra-row">
           <div class="form-item">
             <span class="form-label">宏启动方式：</span>
-            <select class="select-dropdown md" id="startModeSelect" onchange="saveStartMode()">
+            <select class="select-dropdown lg" id="startModeSelect" onchange="saveStartMode()">
               <option value="0">懒人模式 (开关切换)</option>
               <option value="1">仅按下时 (按住生效)</option>
             </select>
@@ -116,7 +122,7 @@
               <option value="5">侧键2</option>
             </select>
             <span class="form-text">则</span>
-            <select class="select-dropdown md" id="qpAction" onchange="saveQuickPause()">
+            <select class="select-dropdown lg" id="qpAction" onchange="saveQuickPause()">
               <option value="1">暂停按键宏</option>
               <option value="2">暂停且连点左键</option>
             </select>
@@ -129,14 +135,6 @@
 
     <!-- ================= 右栏：全局总控与偏好 ================= -->
     <section class="column-right">
-      <!-- 战斗宏启动快捷键醒目卡片 -->
-      <div class="card trigger-card">
-        <div class="trigger-header">
-          <span class="trigger-label">战斗宏启动快捷键：</span>
-          <button class="keycap-btn lg highlight" id="toggleKeyBtn" onclick="captureToggleKey()">X1</button>
-        </div>
-        <div class="trigger-sub">左键点击后按任意键录入，右键快捷选鼠标侧键/中键</div>
-      </div>
 
       <!-- 辅助功能卡片 (暗黑3下显示完整功能，非暗黑3下纯净隐藏) -->
       <div class="card helper-card" id="helperCard">

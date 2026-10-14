@@ -32,14 +32,15 @@ var (
 	procSetWindowPos     = user32DLL.NewProc("SetWindowPos")
 	procReleaseCapture   = user32DLL.NewProc("ReleaseCapture")
 	procSendMessageW     = user32DLL.NewProc("SendMessageW")
+	procSetFocus         = user32DLL.NewProc("SetFocus")
 )
 
 const (
 	maxProfiles = 4
 	numSlots    = 6
 
-	fixedWinWidth  = 880
-	fixedWinHeight = 560
+	fixedWinWidth  = 1040
+	fixedWinHeight = 650
 
 	SW_HIDE     = 0
 	SW_SHOW     = 5
@@ -61,6 +62,10 @@ const (
 	WM_CLOSE         = 0x0010
 	WM_NCLBUTTONDOWN = 0x00A1
 	HTCAPTION        = 2
+
+	WM_MOUSEACTIVATE = 0x0021
+	MA_ACTIVATE      = 1
+	WM_SETFOCUS      = 0x0007
 )
 
 const (
@@ -189,7 +194,8 @@ func (a *app) createMainWindow() error {
 
 	// 创建 WebView2 窗口
 	wv := webview2.NewWithOptions(webview2.WebViewOptions{
-		Debug: false,
+		Debug:     false,
+		AutoFocus: true,
 		WindowOptions: webview2.WindowOptions{
 			Title:  fmt.Sprintf("%s v%s", appName, version),
 			Width:  fixedWinWidth,
@@ -255,6 +261,12 @@ func (w *mainWindow) subclass() {
 				}
 			}
 			return 0
+		}
+		if msg == WM_MOUSEACTIVATE {
+			return uintptr(MA_ACTIVATE)
+		}
+		if msg == WM_SETFOCUS {
+			procSetFocus.Call(w.hwnd)
 		}
 		r, _, _ := procCallWindowProc.Call(oldWndProc, hwnd, uintptr(msg), wp, lp)
 		return r
