@@ -23,7 +23,7 @@
 
     <!-- 全局战斗宏启动快捷键 (通用全局控件) -->
     <div class="header-macro-toggle">
-      <span class="header-macro-label">战斗宏启停快捷键：</span>
+      <span class="header-macro-label">战斗宏启停：</span>
       <button class="keycap-btn highlight header-keycap" id="toggleKeyBtn" onclick="captureToggleKey()" title="点击修改战斗宏启停快捷键">X1</button>
     </div>
 
@@ -82,13 +82,13 @@
           </div>
           <div class="form-item">
             <span class="form-label">配置名：</span>
-            <input type="text" class="input-text sm" id="profileNameInput" onchange="saveProfileName()" maxlength="12">
+            <input type="text" class="input-text sm" id="profileNameInput" onchange="saveProfileName()" maxlength="12" placeholder="配置 1">
           </div>
           <div class="form-item">
             <span class="form-label">按键模式：</span>
             <select class="select-dropdown md" id="profileModeSelect" onchange="saveProfileMode()">
-              <option value="concurrent">并发按键</option>
-              <option value="sequential">循环按键</option>
+              <option value="con">并发按键</option>
+              <option value="seq">循环按键</option>
             </select>
           </div>
         </div>
@@ -126,7 +126,7 @@
               <option value="1">暂停按键宏</option>
               <option value="2">暂停且连点左键</option>
             </select>
-            <input type="number" class="input-num xs" id="qpDelay" onchange="saveQuickPause()" min="500" max="5000">
+            <input type="number" class="input-num xs" id="qpDelay" onchange="saveQuickPause()" min="500" max="5000" placeholder="1500">
             <span class="form-text">ms</span>
           </div>
         </div>
@@ -141,11 +141,11 @@
         <div class="card-title accent">辅助功能 (暗黑 3 专属)</div>
         <div class="helper-controls">
           <div class="form-item">
-            <span class="form-label accent">助手宏启动快捷键：</span>
-            <input type="text" class="input-text xs" id="helperHotkeyInput" onchange="saveHelperSettings()" maxlength="8">
+            <span class="form-label accent">助手宏快捷键：</span>
+            <input type="text" class="input-text xs" id="helperHotkeyInput" onchange="saveHelperSettings()" maxlength="8" placeholder="F5">
           </div>
           <div class="form-item">
-            <span class="form-label">动画速度：</span>
+            <span class="form-label">动作速度：</span>
             <select class="select-dropdown sm" id="helperSpeedSelect" onchange="saveHelperSettings()">
               <option value="50">极快 (50ms)</option>
               <option value="100">快速 (100ms)</option>
@@ -156,19 +156,23 @@
           </div>
         </div>
 
-        <div class="form-item">
-          <span class="form-label">魔盒重铸目标：</span>
-          <select class="select-dropdown sm" id="reforgeTargetSelect" onchange="saveHelperSettings()">
-            <option value="0">只重铸一次</option>
-            <option value="2">普通传奇</option>
-            <option value="3">远古传奇</option>
-            <option value="4">神圣装备</option>
-            <option value="5">太古传奇</option>
-          </select>
-          <label class="checkbox-label sm ml-auto">
-            <input type="checkbox" id="helperDevCheck" onchange="saveHelperSettings()">
-            <span>开发者日志</span>
-          </label>
+        <div class="helper-controls">
+          <div class="form-item">
+            <span class="form-label">魔盒重铸目标：</span>
+            <select class="select-dropdown sm" id="reforgeTargetSelect" onchange="saveHelperSettings()">
+              <option value="0">只重铸一次</option>
+              <option value="2">普通传奇</option>
+              <option value="3">远古传奇</option>
+              <option value="4">神圣装备</option>
+              <option value="5">太古传奇</option>
+            </select>
+          </div>
+          <div class="form-item">
+            <label class="checkbox-label sm">
+              <input type="checkbox" id="helperDevCheck" onchange="saveHelperSettings()">
+              <span>开发者日志</span>
+            </label>
+          </div>
         </div>
 
         <!-- 助手复选列表 -->
@@ -213,7 +217,7 @@
       <span class="status-val red" id="activeProfileText">配置 1</span>
     </div>
     <div class="status-item">
-      <span class="status-pill ready" id="macroStatusPill">● 宏已就绪 (前台生效)</span>
+      <span class="status-tag ready" id="macroStatusPill">● 宏已就绪 (前台生效)</span>
     </div>
     <div class="status-item">
       <span class="status-label">目标进程：</span>

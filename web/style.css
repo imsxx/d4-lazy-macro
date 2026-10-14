@@ -1,4 +1,4 @@
-/* ================= Diablo Lazy Macro 电竞暗黑主题样式 ================= */
+/* ================= Diablo Lazy Macro 电竞暗黑主题样式 (硬朗硬质无圆角设计) ================= */
 
 :root {
   --bg-main: #121316;
@@ -8,6 +8,7 @@
   --bg-hover: #2d313c;
 
   --border-main: #2b2e38;
+  --border-sub: #22252e;
   --border-focus: #c69b50;
 
   --color-text: #f3f4f6;
@@ -40,10 +41,10 @@ body {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  border: 1px solid #2b2e38;
+  border: 1px solid var(--border-main);
 }
 
-/* ================= 顶栏 Header ================= */
+/* ================= 顶栏 Header (硬朗工整，无换行) ================= */
 .app-header {
   height: 48px;
   background-color: #16171b;
@@ -51,7 +52,8 @@ body {
   display: flex;
   align-items: center;
   padding: 0 14px;
-  gap: 12px;
+  gap: 14px;
+  flex-shrink: 0;
 }
 
 .header-brand {
@@ -59,6 +61,8 @@ body {
   align-items: baseline;
   gap: 8px;
   font-weight: bold;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .brand-title {
@@ -66,91 +70,101 @@ body {
   font-size: 15px;
   letter-spacing: 0.5px;
   font-weight: 700;
+  white-space: nowrap;
 }
 
 .brand-version {
   color: var(--color-text-muted);
   font-size: 11px;
+  white-space: nowrap;
 }
 
-/* 游戏选择分段胶囊 */
+/* 游戏选择分段栏 (直角硬朗电竞风) */
 .game-selector {
   display: flex;
   background-color: #101114;
   border: 1px solid var(--border-main);
-  border-radius: 6px;
   padding: 2px;
-  margin-left: 10px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .game-btn {
   background: transparent;
   border: none;
   color: var(--color-text-sub);
-  padding: 5px 12px;
+  padding: 5px 14px;
   font-size: 12px;
   font-family: inherit;
-  border-radius: 4px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: color 0.15s, background-color 0.15s;
 }
 
 .game-btn:hover {
   color: #fff;
+  background-color: #1c1e25;
 }
 
 .game-btn.active {
   background-color: #272a34;
   color: var(--color-accent);
   font-weight: bold;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  box-shadow: inset 0 -2px 0 var(--color-accent);
 }
 
-/* 顶栏全局战斗宏启动快捷键 */
+/* 顶栏全局战斗宏启动快捷键 (利落工整) */
 .header-macro-toggle {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-left: 14px;
   background-color: rgba(239, 68, 68, 0.08);
-  border: 1px solid rgba(239, 68, 68, 0.25);
-  border-radius: 6px;
+  border: 1px solid rgba(239, 68, 68, 0.32);
   padding: 3px 10px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .header-macro-label {
   font-size: 12px;
   font-weight: bold;
   color: #ff7b7b;
+  white-space: nowrap;
 }
 
 .header-keycap {
-  width: 64px !important;
+  width: 68px !important;
   height: 26px !important;
   font-size: 12px !important;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .header-tools {
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .tool-btn {
-  background: #1e2027;
+  background: #1a1c23;
   border: 1px solid var(--border-main);
   color: var(--color-text-sub);
-  padding: 5px 11px;
-  border-radius: 4px;
+  padding: 5px 12px;
   font-size: 12px;
   font-family: inherit;
   cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
   transition: all 0.15s;
 }
 
 .tool-btn:hover {
-  background: #2b2e39;
+  background: #272a34;
   color: #fff;
   border-color: #404454;
 }
@@ -160,6 +174,7 @@ body {
   align-items: center;
   margin-left: 6px;
   gap: 2px;
+  flex-shrink: 0;
 }
 
 .win-btn {
@@ -168,7 +183,6 @@ body {
   color: var(--color-text-sub);
   width: 30px;
   height: 30px;
-  border-radius: 4px;
   font-size: 12px;
   cursor: pointer;
   display: flex;
@@ -191,8 +205,8 @@ body {
 .app-main {
   flex: 1;
   display: flex;
-  padding: 12px;
-  gap: 12px;
+  padding: 12px 14px;
+  gap: 14px;
   overflow: hidden;
 }
 
@@ -201,21 +215,22 @@ body {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  flex-shrink: 0;
 }
 
 .column-right {
-  width: 374px;
+  flex: 1;
+  min-width: 380px;
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 
-/* 卡片基类 */
+/* 卡片基类 (纯硬质直角边缘) */
 .card {
   background-color: var(--bg-card);
   border: 1px solid var(--border-main);
-  border-radius: 6px;
-  padding: 10px 12px;
+  padding: 10px 14px;
   position: relative;
 }
 
@@ -227,6 +242,7 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
 }
 
 .card-title.accent {
@@ -242,7 +258,7 @@ body {
 
 .profile-tabs {
   display: flex;
-  gap: 4px;
+  gap: 2px;
   padding-left: 8px;
   margin-bottom: -1px;
   z-index: 5;
@@ -253,18 +269,18 @@ body {
   background: #14161c;
   border: 1px solid var(--border-main);
   color: var(--color-text-sub);
-  padding: 7px 18px;
-  border-radius: 6px 6px 0 0;
+  padding: 7px 22px;
   font-size: 12px;
   font-weight: 500;
   font-family: inherit;
   cursor: pointer;
+  white-space: nowrap;
   transition: color 0.15s, background 0.15s;
 }
 
 .tab-btn:hover {
   color: #fff;
-  background: #22252e;
+  background: #20232c;
 }
 
 .tab-btn.active {
@@ -281,7 +297,6 @@ body {
   flex: 1;
   display: flex;
   flex-direction: column;
-  border-radius: 0 6px 6px 6px !important;
   position: relative;
   z-index: 1;
 }
@@ -295,6 +310,7 @@ body {
   font-weight: 600;
   border-bottom: 1px solid #232630;
   margin-bottom: 6px;
+  white-space: nowrap;
 }
 
 .slot-list {
@@ -307,29 +323,31 @@ body {
   display: flex;
   align-items: center;
   height: 34px;
+  white-space: nowrap;
 }
 
-.col-slot { width: 84px; text-align: right; padding-right: 10px; color: var(--color-text-sub); font-size: 13px; font-weight: 500; }
-.col-key { width: 72px; text-align: center; }
-.col-strategy { width: 116px; text-align: center; }
-.col-interval { width: 104px; text-align: center; }
-.col-delay { width: 90px; text-align: center; }
-.col-random { width: 72px; text-align: center; }
+.col-slot { width: 84px; text-align: right; padding-right: 10px; color: var(--color-text-sub); font-size: 13px; font-weight: 500; flex-shrink: 0; white-space: nowrap; }
+.col-key { width: 76px; text-align: center; flex-shrink: 0; }
+.col-strategy { width: 118px; text-align: center; flex-shrink: 0; }
+.col-interval { width: 104px; text-align: center; flex-shrink: 0; }
+.col-delay { width: 90px; text-align: center; flex-shrink: 0; }
+.col-random { width: 72px; text-align: center; flex-shrink: 0; }
 
-/* 拟真机械键帽按钮 */
+/* 拟真机械键帽按钮 (直角硬朗键帽) */
 .keycap-btn {
   background: linear-gradient(180deg, #2b2e38 0%, #1e2027 100%);
   border: 1px solid #3b3f4d;
   color: #fff;
   font-weight: bold;
   font-family: inherit;
-  border-radius: 5px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.08);
   cursor: pointer;
   transition: border-color 0.12s ease, box-shadow 0.12s ease;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .keycap-btn:hover {
@@ -343,8 +361,8 @@ body {
   color: var(--color-accent);
 }
 
-.keycap-btn.sm { width: 62px; height: 26px; font-size: 12px; }
-.keycap-btn.md { width: 62px; height: 26px; font-size: 12px; }
+.keycap-btn.sm { width: 64px; height: 26px; font-size: 12px; }
+.keycap-btn.md { width: 64px; height: 26px; font-size: 12px; }
 .keycap-btn.lg { width: 80px; height: 30px; font-size: 13px; }
 .keycap-btn.highlight {
   border-color: #7b2424;
@@ -357,18 +375,26 @@ body {
   box-shadow: 0 0 6px rgba(239, 68, 68, 0.4);
 }
 
-/* 表单输入与下拉框 (全面现代电竞风重绘) */
+/* 表单输入与下拉框 (全面现代硬质电竞风，无圆角) */
 .input-text, .input-num {
   background-color: var(--bg-input);
   border: 1px solid var(--border-main);
   color: var(--color-text);
   font-family: inherit;
   font-size: 12px;
-  border-radius: 4px;
   padding: 4px 8px;
   height: 28px;
   outline: none;
   transition: border-color 0.15s;
+}
+
+.input-num::-webkit-outer-spin-button,
+.input-num::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.input-num {
+  -moz-appearance: textfield;
 }
 
 .input-text:focus, .input-num:focus {
@@ -386,11 +412,11 @@ body {
   color: var(--color-text);
   font-family: inherit;
   font-size: 12px;
-  border-radius: 4px;
   padding: 4px 24px 4px 8px;
   outline: none;
   height: 28px;
   cursor: pointer;
+  white-space: nowrap;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
@@ -412,11 +438,11 @@ body {
 .input-num.xs { width: 56px; text-align: center; }
 .input-num.sm { width: 72px; text-align: center; }
 .input-num.md { width: 88px; text-align: center; }
-.input-text.xs { width: 54px; text-align: center; }
+.input-text.xs { width: 56px; text-align: center; }
 .input-text.sm { width: 100px; }
 
 .select-dropdown.xs { width: 74px; }
-.select-dropdown.sm { width: 92px; }
+.select-dropdown.sm { width: 96px; }
 .select-dropdown.md { width: 114px; }
 .select-dropdown.lg { width: 148px; }
 
@@ -430,19 +456,24 @@ body {
 .extra-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   flex-wrap: nowrap;
+  white-space: nowrap;
 }
 
 .form-item {
   display: flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .form-label {
   color: var(--color-text-sub);
   font-size: 12px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .form-label.accent {
@@ -453,9 +484,15 @@ body {
 .form-text {
   color: var(--color-text-muted);
   font-size: 12px;
+  white-space: nowrap;
 }
 
-/* 复选框样式 */
+#qpDelay {
+  width: 64px !important;
+  text-align: center;
+}
+
+/* 复选框样式 (利落方整) */
 .checkbox-label {
   display: inline-flex;
   align-items: center;
@@ -463,6 +500,7 @@ body {
   cursor: pointer;
   color: var(--color-text);
   font-size: 13px;
+  white-space: nowrap;
 }
 
 .checkbox-label input[type="checkbox"] {
@@ -476,13 +514,15 @@ body {
 .helper-card {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 9px;
 }
 
 .helper-controls {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
+  white-space: nowrap;
 }
 
 #helperSpeedSelect {
@@ -496,16 +536,26 @@ body {
 .helper-checklist {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  background-color: #15161b;
+  gap: 5px;
+  background-color: #14161a;
   padding: 8px 10px;
-  border-radius: 4px;
-  border: 1px solid #23252e;
+  border: 1px solid var(--border-main);
+}
+
+.helper-check-item {
+  font-size: 12px;
+  color: var(--color-text);
+  padding: 2px 0;
+}
+
+.helper-check-item:hover {
+  color: #fff;
 }
 
 .helper-note {
   font-size: 11px;
   color: #b48535;
+  white-space: nowrap;
 }
 
 .pref-card {
@@ -531,9 +581,10 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+  white-space: nowrap;
 }
 
-/* ================= 底栏 Footer ================= */
+/* ================= 底栏 Footer (战术 HUD 风格) ================= */
 .app-footer {
   height: 30px;
   background-color: #141518;
@@ -543,12 +594,16 @@ body {
   padding: 0 14px;
   gap: 16px;
   font-size: 12px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .status-item {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .status-val.red {
@@ -556,22 +611,42 @@ body {
   font-weight: bold;
 }
 
-.status-pill {
-  font-weight: bold;
+/* 硬朗战术 HUD 标签 (绝不使用大圆角药丸) */
+.status-tag {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+  border: 1px solid currentColor;
 }
 
-.status-pill.ready { color: var(--color-green); }
-.status-pill.running { color: var(--color-orange); }
-.status-pill.paused { color: var(--color-red); }
+.status-tag.ready {
+  color: var(--color-green);
+  background-color: rgba(16, 185, 129, 0.08);
+  border-color: rgba(16, 185, 129, 0.35);
+}
+
+.status-tag.running {
+  color: var(--color-orange);
+  background-color: rgba(245, 158, 11, 0.08);
+  border-color: rgba(245, 158, 11, 0.35);
+}
+
+.status-tag.paused {
+  color: var(--color-red);
+  background-color: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.35);
+}
 
 .text-gray { color: var(--color-text-sub); }
 .text-green { color: var(--color-green); }
 .ml-auto { margin-left: auto; }
 
 .footer-spacer { flex: 1; }
-.footer-tech { color: var(--color-text-muted); font-size: 11px; }
+.footer-tech { color: var(--color-text-muted); font-size: 11px; white-space: nowrap; }
 
-/* ================= 浮层与模态 ================= */
+/* ================= 浮层与模态 (硬朗工整) ================= */
 .capture-overlay {
   position: fixed;
   inset: 0;
@@ -584,12 +659,11 @@ body {
 }
 
 .capture-box {
-  background: #1a1c22;
+  background: #181a20;
   border: 1px solid var(--color-accent);
   padding: 24px 36px;
-  border-radius: 8px;
   text-align: center;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.8);
 }
 
 .capture-title {
@@ -612,16 +686,15 @@ body {
 }
 
 .capture-pulse {
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
   background: var(--color-accent);
-  border-radius: 50%;
   margin: 14px auto 0;
   animation: pulse 1.2s infinite;
 }
 
 @keyframes pulse {
   0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(198, 155, 80, 0.7); }
-  70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(198, 155, 80, 0); }
+  70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(198, 155, 80, 0); }
   100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(198, 155, 80, 0); }
 }

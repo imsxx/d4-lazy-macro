@@ -39,8 +39,8 @@ const (
 	maxProfiles = 4
 	numSlots    = 6
 
-	fixedWinWidth  = 1040
-	fixedWinHeight = 650
+	fixedWinWidth  = 1060
+	fixedWinHeight = 660
 
 	SW_HIDE     = 0
 	SW_SHOW     = 5
@@ -493,7 +493,11 @@ func (w *mainWindow) buildFrontendState() *frontendState {
 	s.Helpers.DelayMS = hs.DelayMS
 	s.Helpers.ReforgeTarget = hs.ReforgeTarget
 	s.Helpers.DevMode = hs.DevMode
-	s.Helpers.Enabled = hs.Enabled
+	if hs.Enabled == nil {
+		s.Helpers.Enabled = make(map[string]bool)
+	} else {
+		s.Helpers.Enabled = hs.Enabled
+	}
 
 	allH := helper.All()
 	s.AllHelpers = make([]helperMeta, len(allH))

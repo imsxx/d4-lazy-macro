@@ -24,14 +24,26 @@ window.addEventListener('DOMContentLoaded', async () => {
   // 全局键盘监听，用于按键录入
   window.addEventListener('keydown', handleKeyDown);
 
+  // 初始若没有 Go API（离线或纯静态预览），先装配样本数据供即时渲染
+  if (typeof window.api_getState !== 'function') {
+    state = getMockState();
+    currentTab = state.currentProfileIdx || 0;
+    renderAll();
+  }
+
   // 加载数据
   reloadState();
 });
 
+let stateCheckRetries = 0;
+
 // 从 Go 后端加载最新状态并渲染
 async function reloadState() {
   if (typeof window.api_getState !== 'function') {
-    setTimeout(reloadState, 30);
+    stateCheckRetries++;
+    if (stateCheckRetries < 20) {
+      setTimeout(reloadState, 30);
+    }
     return;
   }
   try {
@@ -46,6 +58,56 @@ async function reloadState() {
     console.error('获取初始状态失败，稍后重试:', err);
     setTimeout(reloadState, 100);
   }
+}
+
+function getMockState() {
+  return {
+    currentGame: 'd3',
+    currentProfileIdx: 0,
+    profileNames: ['配置 1', '配置 2', '配置 3', '配置 4'],
+    profiles: [
+      {
+        name: '配置 1',
+        hk: '无',
+        mode: 'con',
+        slots: [
+          { name: '技能一:', key: '1', strategy: 2, intervalMS: 250, delayMS: 0, randomDelay: false },
+          { name: '技能二:', key: '2', strategy: 0, intervalMS: 300, delayMS: 0, randomDelay: false },
+          { name: '技能三:', key: '3', strategy: 0, intervalMS: 300, delayMS: 0, randomDelay: false },
+          { name: '技能四:', key: '4', strategy: 0, intervalMS: 300, delayMS: 0, randomDelay: false },
+          { name: '左键技能:', key: '鼠标左键', strategy: 0, intervalMS: 300, delayMS: 0, randomDelay: false },
+          { name: '右键技能:', key: '鼠标右键', strategy: 0, intervalMS: 300, delayMS: 0, randomDelay: false }
+        ]
+      },
+      { name: '配置 2', hk: '无', mode: 'con', slots: [] },
+      { name: '配置 3', hk: '无', mode: 'con', slots: [] },
+      { name: '配置 4', hk: '无', mode: 'con', slots: [] }
+    ],
+    toggleKey: '侧键1',
+    startMode: 0,
+    quickPause: { enabled: false, trigger: 1, mouseKey: 5, action: 1, delayMS: 1500 },
+    helpers: {
+      hotkey: 'F5',
+      delayMS: 150,
+      reforgeTarget: 0,
+      devMode: false,
+      enabled: { d3_loot: true, d3_salvage: true }
+    },
+    allHelpers: [
+      { id: 'd3_reforge', name: '魔盒重铸 (连点变换配方)' },
+      { id: 'd3_kanai_convert', name: '魔盒升级/转化材料' },
+      { id: 'd3_gamble', name: '卡达拉快速赌博' },
+      { id: 'd3_loot', name: '快速拾取地上一圈物品' },
+      { id: 'd3_salvage', name: '铁匠处一键快速分解' }
+    ],
+    smartPause: true,
+    soundCue: true,
+    forceStandEnabled: true,
+    forceStandKey: 'SHIFT',
+    macroRunning: true,
+    macroPaused: false,
+    targetProcess: 'Diablo III64.exe'
+  };
 }
 
 // 供 Go 后端主动调用的状态更新通知
@@ -142,7 +204,7 @@ function renderExtraSettings() {
   const prof = state.profiles[currentTab];
   document.getElementById('profileHkBtn').textContent = prof.hk || '无';
   document.getElementById('profileNameInput').value = prof.name || `配置 ${currentTab + 1}`;
-  document.getElementById('profileModeSelect').value = prof.mode || 'concurrent';
+  document.getElementById('profileModeSelect').value = prof.mode || 'con';
 
   document.getElementById('startModeSelect').value = String(state.startMode || 0);
 
@@ -171,9 +233,10 @@ function renderHelperSection() {
 
   const checklist = document.getElementById('helperChecklist');
   if (checklist && state.allHelpers) {
+    const enabledMap = (h && h.enabled) || {};
     checklist.innerHTML = state.allHelpers.map(item => `
-      <label class="checkbox-label">
-        <input type="checkbox" value="${item.id}" ${h.enabled[item.id] ? 'checked' : ''} onchange="saveHelperSettings()">
+      <label class="checkbox-label helper-check-item">
+        <input type="checkbox" value="${item.id}" ${enabledMap[item.id] ? 'checked' : ''} onchange="saveHelperSettings()">
         <span>${item.name}</span>
       </label>
     `).join('');
@@ -197,13 +260,13 @@ function renderStatusAndHeader() {
   const pill = document.getElementById('macroStatusPill');
   if (pill) {
     if (state.macroRunning) {
-      pill.className = 'status-pill running';
+      pill.className = 'status-tag running';
       pill.textContent = `● 宏运行中 (按 ${state.toggleKey} 停止)`;
     } else if (state.macroPaused) {
-      pill.className = 'status-pill paused';
+      pill.className = 'status-tag paused';
       pill.textContent = `⏸ 宏已暂停 (按 ${state.toggleKey} 恢复)`;
     } else {
-      pill.className = 'status-pill ready';
+      pill.className = 'status-tag ready';
       pill.textContent = `● 宏已就绪 (前台生效 · 按 ${state.toggleKey} 启动)`;
     }
   }
