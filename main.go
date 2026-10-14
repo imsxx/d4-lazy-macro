@@ -87,6 +87,7 @@ type app struct {
 	st   *runtimeState
 
 	win *mainWindow // 程序主窗口（可见）
+	hud *floatingHUD // 游戏悬浮状态窗（置顶 Mini HUD）
 
 	settings *store.Settings // 仅 UI 线程访问
 
@@ -179,6 +180,7 @@ func newApp() (*app, error) {
 		settings = store.DefaultSettings()
 	}
 	a.settings = settings
+	a.hud = newFloatingHUD(a)
 	a.log.Printf("当前游戏：%s，目标进程 %s", gameDisplayName(settings.CurrentGame), a.targetProcessOf(settings.CurrentGame))
 
 	if err := a.loadGame(settings.CurrentGame); err != nil {
@@ -209,6 +211,9 @@ func newApp() (*app, error) {
 
 func (a *app) run() int {
 	defer func() {
+		if a.hud != nil {
+			a.hud.destroy()
+		}
 		if eng := a.st.snapshot().Engine; eng != nil {
 			eng.ReleaseAll()
 		}
@@ -231,6 +236,9 @@ func (a *app) run() int {
 
 func (a *app) quitApp() {
 	a.log.Printf("退出主程序")
+	if a.hud != nil {
+		a.hud.destroy()
+	}
 	if a.win != nil {
 		a.win.quitting = true
 		if a.win.wv != nil {
@@ -551,6 +559,9 @@ func (a *app) refreshUI() {
 	if a.win != nil {
 		a.win.refreshStatus()
 	}
+	if a.hud != nil {
+		a.hud.update(snap, a.hud.foreground)
+	}
 }
 
 func (a *app) refreshUIAsync() {
@@ -787,6 +798,9 @@ func (a *app) startTicker() {
 			}
 
 			if snap.Engine == nil {
+				if a.hud != nil {
+					a.hud.update(snap, false)
+				}
 				continue
 			}
 			// 方案切换键：任一方案的切换键被按下即切到该方案（全局生效，与前台无关）
@@ -816,6 +830,10 @@ func (a *app) startTicker() {
 			fg, err := win32.GetForegroundWindow()
 			foreground := err == nil && win32.MatchProcess(fg.ProcessName, snap.TargetProcess)
 			snap.Engine.Tick(time.Now(), foreground)
+
+			if a.hud != nil {
+				a.hud.update(snap, foreground)
+			}
 
 			if enabled := snap.Engine.Enabled(); enabled != lastEnabled || snap.Engine.ProfileIndex() != lastProfile {
 				lastEnabled = enabled

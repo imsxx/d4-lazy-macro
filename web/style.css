@@ -584,6 +584,38 @@ body {
   white-space: nowrap;
 }
 
+.pref-separator {
+  height: 1px;
+  background-color: var(--border-main);
+  margin: 2px 0;
+}
+
+.pref-hud-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pref-hud-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.pref-hud-options {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 21px;
+  white-space: nowrap;
+}
+
+.tool-btn.xs {
+  height: 22px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+
 /* ================= 底栏 Footer (战术 HUD 风格) ================= */
 .app-footer {
   height: 30px;

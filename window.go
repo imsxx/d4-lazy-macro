@@ -187,6 +187,16 @@ type frontendState struct {
 	TargetProcess     string       `json:"targetProcess"`
 	MacroRunning      bool         `json:"macroRunning"`
 	MacroPaused       bool         `json:"macroPaused"`
+	HUD               frontendHUD  `json:"hud"`
+}
+
+type frontendHUD struct {
+	Enabled  bool   `json:"enabled"`
+	Mode     string `json:"mode"`
+	Locked   bool   `json:"locked"`
+	GameOnly bool   `json:"gameOnly"`
+	X        int    `json:"x"`
+	Y        int    `json:"y"`
 }
 
 type mainWindow struct {
@@ -514,6 +524,27 @@ func (w *mainWindow) initBindings() {
 		return nil
 	})
 
+	_ = w.wv.Bind("api_updateHUD", func(enabled bool, mode string, locked bool, gameOnly bool) error {
+		w.app.settings.FloatingHUD.Enabled = enabled
+		w.app.settings.FloatingHUD.Mode = mode
+		w.app.settings.FloatingHUD.Locked = locked
+		w.app.settings.FloatingHUD.GameOnly = gameOnly
+		_ = store.SaveSettings(w.app.dir, *w.app.settings)
+		if w.app.hud != nil {
+			w.app.hud.applySettings()
+		}
+		w.refreshStatus()
+		return nil
+	})
+
+	_ = w.wv.Bind("api_resetHUDPos", func() error {
+		if w.app.hud != nil {
+			w.app.hud.resetPosition()
+		}
+		w.refreshStatus()
+		return nil
+	})
+
 	_ = w.wv.Bind("api_importClipboard", func() (bool, error) {
 		w.app.importFromClipboard()
 		return true, nil
@@ -625,6 +656,17 @@ func (w *mainWindow) buildFrontendState() *frontendState {
 	// 运行状态
 	if snap.Engine != nil {
 		s.MacroRunning = snap.Engine.Enabled()
+	}
+
+	// 悬浮状态窗
+	hudCfg := w.app.settings.FloatingHUD
+	s.HUD = frontendHUD{
+		Enabled:  hudCfg.Enabled,
+		Mode:     hudCfg.Mode,
+		Locked:   hudCfg.Locked,
+		GameOnly: hudCfg.GameOnly,
+		X:        hudCfg.X,
+		Y:        hudCfg.Y,
 	}
 
 	return s

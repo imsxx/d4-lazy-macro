@@ -150,6 +150,36 @@ type Settings struct {
 	SmartPause  bool                `json:"smart_pause,omitempty"` // 智能暂停：按 Tab 暂停/恢复，按回车 / T / M 停止宏
 	SoundCue    bool                `json:"sound_cue,omitempty"`   // 切换配置成功时播放提示音
 	Helpers     HelperSettings      `json:"helpers,omitempty"`     // 助手功能（暗黑3 专属）
+	FloatingHUD FloatingHUDSettings `json:"floating_hud,omitempty"` // 游戏悬浮状态指示器（Mini HUD）
+}
+
+// FloatingHUDSettings 是游戏悬浮状态指示器的设置。
+type FloatingHUDSettings struct {
+	Enabled  bool   `json:"enabled"`             // 是否开启悬浮窗
+	Mode     string `json:"mode,omitempty"`      // "bar"（战术横条）或 "badge"（紧凑方标）
+	X        int    `json:"x,omitempty"`         // 屏幕 X 坐标
+	Y        int    `json:"y,omitempty"`         // 屏幕 Y 坐标
+	Locked   bool   `json:"locked,omitempty"`    // 是否锁定位置（禁止拖拽）
+	GameOnly bool   `json:"game_only,omitempty"` // 是否仅游戏位于前台时显示
+}
+
+// DefaultFloatingHUD 返回悬浮窗默认设置。
+func DefaultFloatingHUD() FloatingHUDSettings {
+	return FloatingHUDSettings{
+		Enabled:  true,
+		Mode:     "bar",
+		X:        80,
+		Y:        80,
+		Locked:   false,
+		GameOnly: true,
+	}
+}
+
+func (f FloatingHUDSettings) validate() error {
+	if f.Mode != "" && f.Mode != "bar" && f.Mode != "badge" {
+		return fmt.Errorf("悬浮窗形态 %q 无效（有效值：bar / badge）", f.Mode)
+	}
+	return nil
 }
 
 // DefaultDir 返回默认数据目录（%APPDATA%\diablo-lazy-macro）。
@@ -168,7 +198,11 @@ func Path(dir, name string) string {
 
 // DefaultSettings 返回缺省设置（当前游戏为默认游戏）。
 func DefaultSettings() *Settings {
-	return &Settings{CurrentGame: games.Default().ID, QuickPause: DefaultQuickPause()}
+	return &Settings{
+		CurrentGame: games.Default().ID,
+		QuickPause:  DefaultQuickPause(),
+		FloatingHUD: DefaultFloatingHUD(),
+	}
 }
 
 // applyDefaults 补齐缺失字段（旧存档升级用）：JSON 里没有的字段是零值，
@@ -196,6 +230,13 @@ func (s *Settings) applyDefaults() {
 	}
 	if s.Helpers.DelayMS == 0 {
 		s.Helpers.DelayMS = h.DelayMS
+	}
+	if s.FloatingHUD.Mode == "" {
+		s.FloatingHUD.Mode = "bar"
+	}
+	if s.FloatingHUD.X <= 0 && s.FloatingHUD.Y <= 0 {
+		s.FloatingHUD.X = 80
+		s.FloatingHUD.Y = 80
 	}
 }
 
@@ -241,6 +282,9 @@ func (s *Settings) Validate() error {
 		return err
 	}
 	if err := s.Helpers.validate(); err != nil {
+		return err
+	}
+	if err := s.FloatingHUD.validate(); err != nil {
 		return err
 	}
 	return nil

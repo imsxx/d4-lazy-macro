@@ -205,6 +205,34 @@
             </label>
             <button class="keycap-btn sm" id="forceStandKeyBtn" onclick="captureForceStandKey()">Shift</button>
           </div>
+
+          <div class="pref-separator"></div>
+
+          <div class="pref-hud-section">
+            <div class="pref-hud-header">
+              <label class="checkbox-label">
+                <input type="checkbox" id="hudEnabledCheck" onchange="saveHUDSettings()">
+                <span>在场游戏悬浮指示器</span>
+              </label>
+              <button class="tool-btn xs" onclick="resetHUDPos()" title="悬浮窗若移出屏幕可一键复位">重置位置</button>
+            </div>
+            <div class="pref-hud-options" id="hudOptionsRow">
+              <span class="form-label">形态：</span>
+              <select class="select-dropdown sm" id="hudModeSelect" onchange="saveHUDSettings()">
+                <option value="bar">战术横条</option>
+                <option value="badge">紧凑方标</option>
+              </select>
+              <label class="checkbox-label sm">
+                <input type="checkbox" id="hudLockedCheck" onchange="saveHUDSettings()">
+                <span>锁定位置</span>
+              </label>
+              <label class="checkbox-label sm">
+                <input type="checkbox" id="hudGameOnlyCheck" onchange="saveHUDSettings()">
+                <span>仅前台显示</span>
+              </label>
+            </div>
+            <div class="pref-desc">拖拽记忆位置，双击呼出主窗口，右键弹出快捷菜单</div>
+          </div>
         </div>
       </div>
     </section>

@@ -106,6 +106,7 @@ function getMockState() {
     forceStandKey: 'SHIFT',
     macroRunning: true,
     macroPaused: false,
+    hud: { enabled: true, mode: 'bar', locked: false, gameOnly: true, x: 80, y: 80 },
     targetProcess: 'Diablo III64.exe'
   };
 }
@@ -118,6 +119,7 @@ window.onStateUpdate = function(newState) {
   if (!container || container.children.length === 0) {
     renderAll();
   } else {
+    renderPreferences();
     renderStatusAndHeader();
   }
 };
@@ -254,6 +256,17 @@ function renderPreferences() {
   document.getElementById('soundCueCheck').checked = !!state.soundCue;
   document.getElementById('forceStandCheck').checked = !!state.forceStandEnabled;
   document.getElementById('forceStandKeyBtn').textContent = state.forceStandKey || 'Shift';
+
+  if (state.hud) {
+    const hudEnabled = document.getElementById('hudEnabledCheck');
+    if (hudEnabled) hudEnabled.checked = !!state.hud.enabled;
+    const hudMode = document.getElementById('hudModeSelect');
+    if (hudMode) hudMode.value = state.hud.mode || 'bar';
+    const hudLocked = document.getElementById('hudLockedCheck');
+    if (hudLocked) hudLocked.checked = !!state.hud.locked;
+    const hudGameOnly = document.getElementById('hudGameOnlyCheck');
+    if (hudGameOnly) hudGameOnly.checked = !!state.hud.gameOnly;
+  }
 }
 
 // 渲染底部状态与标题
@@ -385,6 +398,26 @@ async function savePreferences() {
 
 async function saveForceStand() {
   await savePreferences();
+}
+
+async function saveHUDSettings() {
+  const enabled = document.getElementById('hudEnabledCheck').checked;
+  const mode = document.getElementById('hudModeSelect').value;
+  const locked = document.getElementById('hudLockedCheck').checked;
+  const gameOnly = document.getElementById('hudGameOnlyCheck').checked;
+  if (state.hud) {
+    state.hud.enabled = enabled;
+    state.hud.mode = mode;
+    state.hud.locked = locked;
+    state.hud.gameOnly = gameOnly;
+  }
+  await window.api_updateHUD(enabled, mode, locked, gameOnly);
+  flashAutoSave();
+}
+
+async function resetHUDPos() {
+  await window.api_resetHUDPos();
+  flashAutoSave();
 }
 
 // ================= 按键捕获模态系统 =================
