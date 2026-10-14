@@ -361,8 +361,9 @@ body {
   color: var(--color-accent);
 }
 
-.keycap-btn.sm { width: 64px; height: 26px; font-size: 12px; }
-.keycap-btn.md { width: 64px; height: 26px; font-size: 12px; }
+/* 键帽按内容自适应：中文键名（鼠标中键 / 小键盘5）不再被 64px 硬宽裁掉，同时不撑破列宽 */
+.keycap-btn.sm { min-width: 64px; max-width: 74px; padding: 0 6px; height: 26px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+.keycap-btn.md { min-width: 64px; height: 26px; font-size: 12px; }
 .keycap-btn.lg { width: 80px; height: 30px; font-size: 13px; }
 .keycap-btn.highlight {
   border-color: #7b2424;
@@ -671,6 +672,13 @@ body {
   border-color: rgba(239, 68, 68, 0.35);
 }
 
+/* 休眠：目标游戏不在前台（与悬浮窗的灰色一致） */
+.status-tag.dormant {
+  color: var(--color-text-muted);
+  background-color: rgba(107, 114, 128, 0.08);
+  border-color: rgba(107, 114, 128, 0.35);
+}
+
 .text-gray { color: var(--color-text-sub); }
 .text-green { color: var(--color-green); }
 .ml-auto { margin-left: auto; }
@@ -688,6 +696,107 @@ body {
   align-items: center;
   justify-content: center;
   z-index: 1000;
+}
+
+/* ================= 提示条（保存失败 / 导入结果 / 键位绑定反馈） =================
+   固定悬浮在顶栏下方，不参与布局：出现与消失都不会让界面跳动。 */
+.notice-bar {
+  position: fixed;
+  top: 48px;
+  left: 0;
+  right: 0;
+  z-index: 900;
+  padding: 7px 14px;
+  font-size: 12px;
+  line-height: 1.4;
+  border-bottom: 1px solid var(--border-main);
+}
+
+.notice-bar.error {
+  color: #ffd0d0;
+  background-color: rgba(120, 24, 24, 0.96);
+  border-bottom-color: #ef4444;
+}
+
+.notice-bar.ok {
+  color: #d6ffe9;
+  background-color: rgba(10, 92, 66, 0.96);
+  border-bottom-color: var(--color-green);
+}
+
+/* ================= 槽位说明与轻量提示 ================= */
+.card-hints {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-sub);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.hint-line {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: normal;
+}
+
+/* ================= 按键捕获浮层的补充块 ================= */
+.capture-box.wide {
+  max-width: 620px;
+}
+
+.capture-hint {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  margin-top: 4px;
+  white-space: normal;
+}
+
+.capture-extras {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  margin-top: 10px;
+}
+
+.capture-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 14px;
+}
+
+.import-preview {
+  margin-top: 10px;
+  max-height: 300px;
+  overflow: auto;
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: #14161a;
+  border: 1px solid var(--border-main);
+  padding: 10px 12px;
+  color: var(--color-text);
+  font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* 悬浮窗关闭时子选项置灰提示 */
+.pref-hud-options.disabled {
+  opacity: 0.45;
+}
+
+/* 「改动即时生效」的闪烁反馈 */
+#autoSaveIndicator {
+  opacity: 0.55;
+  transition: opacity 0.25s ease;
+}
+
+#autoSaveIndicator.flash {
+  opacity: 1;
+  color: var(--color-accent-hover);
 }
 
 .capture-box {

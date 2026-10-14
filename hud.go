@@ -37,16 +37,16 @@ var (
 	procTrackMouseEvent        = user32DLL.NewProc("TrackMouseEvent")
 	procLoadCursorW            = user32DLL.NewProc("LoadCursorW")
 
-	procCreatePopupMenu        = user32DLL.NewProc("CreatePopupMenu")
-	procAppendMenuW            = user32DLL.NewProc("AppendMenuW")
-	procTrackPopupMenuEx       = user32DLL.NewProc("TrackPopupMenuEx")
-	procDestroyMenu            = user32DLL.NewProc("DestroyMenu")
-	procGetCursorPos           = user32DLL.NewProc("GetCursorPos")
-	procGetWindowRect          = user32DLL.NewProc("GetWindowRect")
-	procInvalidateRect         = user32DLL.NewProc("InvalidateRect")
-	procUpdateWindow           = user32DLL.NewProc("UpdateWindow")
-	procDefWindowProcW         = user32DLL.NewProc("DefWindowProcW")
-	procGetDpiForWindow        = user32DLL.NewProc("GetDpiForWindow")
+	procCreatePopupMenu  = user32DLL.NewProc("CreatePopupMenu")
+	procAppendMenuW      = user32DLL.NewProc("AppendMenuW")
+	procTrackPopupMenuEx = user32DLL.NewProc("TrackPopupMenuEx")
+	procDestroyMenu      = user32DLL.NewProc("DestroyMenu")
+	procGetCursorPos     = user32DLL.NewProc("GetCursorPos")
+	procGetWindowRect    = user32DLL.NewProc("GetWindowRect")
+	procInvalidateRect   = user32DLL.NewProc("InvalidateRect")
+	procUpdateWindow     = user32DLL.NewProc("UpdateWindow")
+	procDefWindowProcW   = user32DLL.NewProc("DefWindowProcW")
+	procGetDpiForWindow  = user32DLL.NewProc("GetDpiForWindow")
 )
 
 const (
@@ -63,18 +63,18 @@ const (
 	SWP_NOACTIVATE    = 0x0010
 	SW_SHOWNOACTIVATE = 4
 
-	WM_PAINT          = 0x000F
-	WM_DESTROY        = 0x0002
-	WM_LBUTTONDOWN    = 0x0201
-	WM_LBUTTONUP      = 0x0202
-	WM_RBUTTONUP      = 0x0205
-	WM_LBUTTONDBLCLK  = 0x0203
-	WM_NCLBUTTONDBLCLK= 0x00A3
-	WM_MOUSEMOVE      = 0x0200
-	WM_MOUSELEAVE     = 0x02A3
-	WM_ERASEBKGND     = 0x0014
-	WM_EXITSIZEMOVE   = 0x0232
-	WM_DPICHANGED     = 0x02E0
+	WM_PAINT           = 0x000F
+	WM_DESTROY         = 0x0002
+	WM_LBUTTONDOWN     = 0x0201
+	WM_LBUTTONUP       = 0x0202
+	WM_RBUTTONUP       = 0x0205
+	WM_LBUTTONDBLCLK   = 0x0203
+	WM_NCLBUTTONDBLCLK = 0x00A3
+	WM_MOUSEMOVE       = 0x0200
+	WM_MOUSELEAVE      = 0x02A3
+	WM_ERASEBKGND      = 0x0014
+	WM_EXITSIZEMOVE    = 0x0232
+	WM_DPICHANGED      = 0x02E0
 
 	TME_LEAVE = 0x00000002
 
@@ -147,10 +147,16 @@ type floatingHUD struct {
 	gameTag     string // "D3", "D4", "D2R"
 	profileName string // "配置 1"
 	profileIdx  int    // 0..3
-	status      int    // 0: 就绪, 1: 运行中, 2: 已暂停, 3: 休眠(非前台)
+	status      int    // engineStatus 的取值：0 就绪 / 1 运行中 / 2 已暂停 / 3 休眠
 	foreground  bool
 	visible     bool
 	hovered     bool
+
+	// 设置快照：UI 线程在 applySettings 时写入，tick 线程只读（不直接读 settings，避免竞争）
+	cfgEnabled  bool
+	cfgGameOnly bool
+	cfgLocked   bool
+	cfgMode     string
 
 	// GDI 预分配画刷与字体
 	hFont       uintptr
@@ -182,6 +188,7 @@ func newFloatingHUD(a *app) *floatingHUD {
 
 	h.createWindow()
 	h.initGDI()
+	h.syncConfig()
 	h.applySettings()
 	return h
 }
@@ -260,7 +267,7 @@ func hudWndProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 		return 1 // 双缓冲自绘背景，防止闪烁
 
 	case WM_LBUTTONDOWN:
-		if !h.app.settings.FloatingHUD.Locked {
+		if _, _, locked, _ := h.config(); !locked {
 			procReleaseCapture.Call()
 			procSendMessageW.Call(hwnd, uintptr(WM_NCLBUTTONDOWN), uintptr(HTCAPTION), 0)
 		}
@@ -286,8 +293,8 @@ func hudWndProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 		return 0
 
 	case WM_MOUSEMOVE:
-		if !h.hovered {
-			h.hovered = true
+		if !h.isHovered() {
+			h.markHovered(true)
 			var tme trackMouseEventStruct
 			tme.CbSize = uint32(unsafe.Sizeof(tme))
 			tme.DwFlags = TME_LEAVE
@@ -298,7 +305,7 @@ func hudWndProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 		return 0
 
 	case WM_MOUSELEAVE:
-		h.hovered = false
+		h.markHovered(false)
 		procInvalidateRect.Call(hwnd, 0, 0)
 		return 0
 
@@ -355,24 +362,72 @@ func (h *floatingHUD) createWindow() {
 	procDwmSetWindowAttribute.Call(hwnd, uintptr(DWMWA_USE_IMMERSIVE_DARK_MODE), uintptr(unsafe.Pointer(&darkMode)), 4)
 }
 
+// syncConfig 把设置拷进带锁的快照（UI 线程调用）；tick 线程只读快照。
+func (h *floatingHUD) syncConfig() {
+	s := h.app.settings.FloatingHUD
+	h.mu.Lock()
+	h.cfgEnabled = s.Enabled
+	h.cfgGameOnly = s.GameOnly
+	h.cfgLocked = s.Locked
+	h.cfgMode = s.Mode
+	h.mu.Unlock()
+}
+
+// config 返回设置快照（enabled, gameOnly, locked, mode）。
+func (h *floatingHUD) config() (bool, bool, bool, string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.cfgEnabled, h.cfgGameOnly, h.cfgLocked, h.cfgMode
+}
+
 func (h *floatingHUD) dimensions() (int, int) {
-	if h.app.settings.FloatingHUD.Mode == "badge" {
+	if _, _, _, mode := h.config(); mode == "badge" {
 		return h.scale(hudBaseBadgeW), h.scale(hudBaseBadgeH)
 	}
 	return h.scale(hudBaseBarW), h.scale(hudBaseBarH)
+}
+
+// isVisible / isForeground / markHovered 是带锁的小访问器：
+// 悬浮窗的窗口过程在 UI 线程、状态同步在 tick 线程，字段必须统一在 h.mu 下读写。
+func (h *floatingHUD) isVisible() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.visible
+}
+
+func (h *floatingHUD) isForeground() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.foreground
+}
+
+func (h *floatingHUD) isHovered() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.hovered
+}
+
+func (h *floatingHUD) markHovered(v bool) {
+	h.mu.Lock()
+	h.hovered = v
+	h.mu.Unlock()
 }
 
 func (h *floatingHUD) applySettings() {
 	if h.hwnd == 0 {
 		return
 	}
-	s := h.app.settings.FloatingHUD
-	if !s.Enabled {
+	h.syncConfig()
+	enabled, _, _, _ := h.config()
+	if !enabled {
 		procShowWindow.Call(h.hwnd, uintptr(SW_HIDE))
+		h.mu.Lock()
 		h.visible = false
+		h.mu.Unlock()
 		return
 	}
 
+	s := h.app.settings.FloatingHUD
 	w, height := h.dimensions()
 	procSetWindowPos.Call(
 		h.hwnd,
@@ -381,6 +436,9 @@ func (h *floatingHUD) applySettings() {
 		uintptr(w), uintptr(height),
 		uintptr(SWP_NOACTIVATE|SWP_FRAMECHANGED),
 	)
+	h.mu.Lock()
+	h.visible = true
+	h.mu.Unlock()
 
 	procInvalidateRect.Call(h.hwnd, 0, 1)
 	procUpdateWindow.Call(h.hwnd)
@@ -409,27 +467,18 @@ func (h *floatingHUD) update(snap runtimeSnapshot, foreground bool) {
 	if h.hwnd == 0 {
 		return
 	}
-	s := h.app.settings.FloatingHUD
-	if !s.Enabled {
-		if h.visible {
+	enabled, gameOnly, _, _ := h.config()
+	if !enabled || (gameOnly && !foreground) {
+		if h.isVisible() {
 			procShowWindow.Call(h.hwnd, uintptr(SW_HIDE))
+			h.mu.Lock()
 			h.visible = false
-		}
-		return
-	}
-
-	// 仅游戏在前台时显示
-	if s.GameOnly && !foreground {
-		if h.visible {
-			procShowWindow.Call(h.hwnd, uintptr(SW_HIDE))
-			h.visible = false
+			h.mu.Unlock()
 		}
 		return
 	}
 
 	h.mu.Lock()
-	defer h.mu.Unlock()
-
 	h.foreground = foreground
 	h.gameTag = strings.ToUpper(snap.GameID)
 	if h.gameTag == "" {
@@ -443,26 +492,19 @@ func (h *floatingHUD) update(snap runtimeSnapshot, foreground bool) {
 		} else {
 			h.profileName = fmt.Sprintf("配置 %d", h.profileIdx+1)
 		}
-
-		if !foreground {
-			h.status = 3 // 休眠
-		} else if snap.Engine.Paused() {
-			h.status = 2 // 已暂停
-		} else if snap.Engine.Enabled() {
-			h.status = 1 // 运行中
-		} else {
-			h.status = 0 // 就绪
-		}
+		// 状态判定与主窗口底栏共用 status.go 的同一套规则与优先级。
+		h.status = int(engineStatusOf(snap.Engine, foreground))
 	} else {
-		h.status = 0
+		h.status = int(statusReady)
 		h.profileName = "未配置"
 	}
+	needShow := !h.visible
+	h.visible = true
+	h.mu.Unlock()
 
-	if !h.visible {
+	if needShow {
 		procShowWindow.Call(h.hwnd, uintptr(SW_SHOWNOACTIVATE))
-		h.visible = true
 	}
-
 	procInvalidateRect.Call(h.hwnd, 0, 0)
 }
 
@@ -473,7 +515,7 @@ func (h *floatingHUD) paint(hwnd uintptr) {
 	profName := h.profileName
 	profIdx := h.profileIdx
 	hovered := h.hovered
-	isBadge := h.app.settings.FloatingHUD.Mode == "badge"
+	isBadge := h.cfgMode == "badge"
 	h.mu.Unlock()
 
 	var ps paintStruct
@@ -504,27 +546,25 @@ func (h *floatingHUD) paint(hwnd uintptr) {
 	}
 
 	// 3. 状态呼吸指示灯画刷与文字颜色 (0x00bbggrr)
+	//    状态取值与文案来自 status.go：与主窗口底栏同源。
+	st := engineStatus(status)
 	var dotBrush uintptr
 	var statusColor uint32
-	var statusText string
-	switch status {
-	case 1:
+	switch st {
+	case statusRunning:
 		dotBrush = h.orangeBrush
 		statusColor = 0x000B9EF5 // #f59e0b 运行橙
-		statusText = "运行中"
-	case 2:
+	case statusPaused:
 		dotBrush = h.redBrush
 		statusColor = 0x004444EF // #ef4444 暂停红
-		statusText = "已暂停"
-	case 3:
+	case statusDormant:
 		dotBrush = h.grayBrush
 		statusColor = 0x0080726B // #6b7280 休眠灰
-		statusText = "休眠"
 	default:
 		dotBrush = h.greenBrush
 		statusColor = 0x0081B910 // #10b981 就绪绿
-		statusText = "就绪"
 	}
+	statusText := engineStatusShort(st)
 
 	// 4. 绘制状态指示圆点（使用 NULL_PEN 去除黑边）
 	nullPen, _, _ := procGetStockObject.Call(8) // NULL_PEN = 8

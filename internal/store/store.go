@@ -125,8 +125,8 @@ func (h *HelperSettings) SetEnabled(id string, on bool) {
 	delete(h.Enabled, id)
 }
 
-// validate 校验助手设置。
-func (h HelperSettings) validate() error {
+// Validate 校验助手设置（供界面在写盘前先校验，避免整份设置因一处非法而全部不落盘）。
+func (h HelperSettings) Validate() error {
 	if h.Hotkey != "" {
 		if _, err := keys.Parse(h.Hotkey); err != nil {
 			return fmt.Errorf("助手快捷键无效：%v", err)
@@ -144,12 +144,12 @@ func (h HelperSettings) validate() error {
 // Settings 是工具级设置（不随分享码分发）。
 type Settings struct {
 	CurrentGame string              `json:"current_game"`
-	Processes   map[string]string   `json:"processes,omitempty"`   // 各游戏目标进程名的本地覆盖
-	GameKeys    map[string]GameKeys `json:"game_keys,omitempty"`   // 各游戏的按键映射（强制站立等）
-	QuickPause  QuickPauseSettings  `json:"quick_pause,omitempty"` // 快速暂停（全局操作习惯）
-	SmartPause  bool                `json:"smart_pause,omitempty"` // 智能暂停：按 Tab 暂停/恢复，按回车 / T / M 停止宏
-	SoundCue    bool                `json:"sound_cue,omitempty"`   // 切换配置成功时播放提示音
-	Helpers     HelperSettings      `json:"helpers,omitempty"`     // 助手功能（暗黑3 专属）
+	Processes   map[string]string   `json:"processes,omitempty"`    // 各游戏目标进程名的本地覆盖
+	GameKeys    map[string]GameKeys `json:"game_keys,omitempty"`    // 各游戏的按键映射（强制站立等）
+	QuickPause  QuickPauseSettings  `json:"quick_pause,omitempty"`  // 快速暂停（全局操作习惯）
+	SmartPause  bool                `json:"smart_pause,omitempty"`  // 智能暂停：按 Tab 暂停/恢复，按回车 / T / M 停止宏
+	SoundCue    bool                `json:"sound_cue,omitempty"`    // 切换配置成功时播放提示音
+	Helpers     HelperSettings      `json:"helpers,omitempty"`      // 助手功能（暗黑3 专属）
 	FloatingHUD FloatingHUDSettings `json:"floating_hud,omitempty"` // 游戏悬浮状态指示器（Mini HUD）
 }
 
@@ -240,8 +240,8 @@ func (s *Settings) applyDefaults() {
 	}
 }
 
-// validateQuickPause 校验快速暂停设置。
-func (q QuickPauseSettings) validate() error {
+// Validate 校验快速暂停设置（供界面在写盘前先校验）。
+func (q QuickPauseSettings) Validate() error {
 	if q.Trigger < QuickPauseDoubleClick || q.Trigger > QuickPauseHold {
 		return fmt.Errorf("快速暂停的触发方式取值 %d 无效（1 双击 / 2 单击 / 3 压住）", q.Trigger)
 	}
@@ -278,10 +278,10 @@ func (s *Settings) Validate() error {
 			return fmt.Errorf("%s 的强制站立键无效：%v", id, err)
 		}
 	}
-	if err := s.QuickPause.validate(); err != nil {
+	if err := s.QuickPause.Validate(); err != nil {
 		return err
 	}
-	if err := s.Helpers.validate(); err != nil {
+	if err := s.Helpers.Validate(); err != nil {
 		return err
 	}
 	if err := s.FloatingHUD.validate(); err != nil {

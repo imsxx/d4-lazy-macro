@@ -1,530 +1,808 @@
 // ================= Diablo Lazy Macro 前端交互与 API 驱动 =================
+// 设计约定：
+//  1) 真值源在 Go：界面只渲染 Go 下发的状态，任何写操作成功后重新拉取状态（不做本地乐观更新）。
+//  2) 失败必须可见：所有接口调用统一走 callApi()，失败弹提示条并保持界面为「改动前的值」。
+//  3) 键位合法性由 Go 裁决（keyitems.go）：这里只把捕获到的原始键名 / 鼠标键 token 发过去。
 
 let state = null;
 let currentTab = 0;
-let capturingTarget = null; // null | { type: 'slot', index: 0 } | { type: 'toggle' } | { type: 'profileHk' } | { type: 'forceStand' }
+let capture = null; // { mode, target, options }
+let readySent = false;
+let profilesDigest = '';
+let noticeTimer = null;
 
-const strategyNames = ['禁用', '按住不放', '连点', '保持Buff'];
+const STRATEGY_NAMES = ['禁用', '按住不放', '连点', '保持Buff'];
 
-// 初始化入口
-window.addEventListener('DOMContentLoaded', async () => {
-  // 顶栏无边框原生拖拽
-  const header = document.getElementById('appHeader');
-  if (header) {
-    header.addEventListener('mousedown', (e) => {
-      if (e.target.closest('button, input, select, label')) {
-        return;
-      }
-      if (e.button === 0 && typeof window.api_dragWindow === 'function') {
-        window.api_dragWindow();
-      }
-    });
-  }
+// ---------------------------------------------------------------- 基础设施
 
-  // 全局键盘监听，用于按键录入
-  window.addEventListener('keydown', handleKeyDown);
-
-  // 初始若没有 Go API（离线或纯静态预览），先装配样本数据供即时渲染
-  if (typeof window.api_getState !== 'function') {
-    state = getMockState();
-    currentTab = state.currentProfileIdx || 0;
-    renderAll();
-  }
-
-  // 加载数据
-  reloadState();
-});
-
-let stateCheckRetries = 0;
-
-// 从 Go 后端加载最新状态并渲染
-async function reloadState() {
-  if (typeof window.api_getState !== 'function') {
-    stateCheckRetries++;
-    if (stateCheckRetries < 20) {
-      setTimeout(reloadState, 30);
-    }
+function onReady(fn) {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', fn);
     return;
   }
+  fn();
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function $id(id) {
+  return document.getElementById(id);
+}
+
+function esc(text) {
+  return String(text == null ? '' : text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function errorText(err) {
+  if (!err) return '未知错误';
+  if (typeof err === 'string') return err;
+  if (err.message) return err.message;
+  return String(err);
+}
+
+// showNotice 在顶栏下方显示一条提示；error 会停留更久，成功提示 3 秒后自动收起。
+function showNotice(message, kind) {
+  const bar = $id('noticeBar');
+  if (!bar) return;
+  bar.textContent = message;
+  bar.className = 'notice-bar ' + (kind === 'ok' ? 'ok' : 'error');
+  bar.style.display = 'block';
+  if (noticeTimer) clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => {
+    bar.style.display = 'none';
+  }, kind === 'ok' ? 3000 : 7000);
+}
+
+function showError(message) {
+  showNotice(message, 'error');
+}
+
+// callApi 是唯一的前端→后端出口：接口缺失或后端拒绝都变成可见提示，绝不静默。
+async function callApi(name, ...args) {
+  const fn = window[name];
+  if (typeof fn !== 'function') {
+    showError('界面接口 ' + name + ' 不可用：后端未就绪，请重启程序');
+    return { ok: false };
+  }
   try {
-    state = await window.api_getState();
-    if (!state) {
-      setTimeout(reloadState, 50);
-      return;
-    }
-    currentTab = state.currentProfileIdx || 0;
-    renderAll();
+    const value = await fn(...args);
+    return { ok: true, value };
   } catch (err) {
-    console.error('获取初始状态失败，稍后重试:', err);
-    setTimeout(reloadState, 100);
+    showError(errorText(err));
+    return { ok: false };
   }
 }
 
-function getMockState() {
-  return {
-    currentGame: 'd3',
-    currentProfileIdx: 0,
-    profileNames: ['配置 1', '配置 2', '配置 3', '配置 4'],
-    profiles: [
-      {
-        name: '配置 1',
-        hk: '无',
-        mode: 'con',
-        slots: [
-          { name: '技能一:', key: '1', strategy: 2, intervalMS: 250, delayMS: 0, randomDelay: false },
-          { name: '技能二:', key: '2', strategy: 0, intervalMS: 300, delayMS: 0, randomDelay: false },
-          { name: '技能三:', key: '3', strategy: 0, intervalMS: 300, delayMS: 0, randomDelay: false },
-          { name: '技能四:', key: '4', strategy: 0, intervalMS: 300, delayMS: 0, randomDelay: false },
-          { name: '左键技能:', key: '鼠标左键', strategy: 0, intervalMS: 300, delayMS: 0, randomDelay: false },
-          { name: '右键技能:', key: '鼠标右键', strategy: 0, intervalMS: 300, delayMS: 0, randomDelay: false }
-        ]
-      },
-      { name: '配置 2', hk: '无', mode: 'con', slots: [] },
-      { name: '配置 3', hk: '无', mode: 'con', slots: [] },
-      { name: '配置 4', hk: '无', mode: 'con', slots: [] }
-    ],
-    toggleKey: '侧键1',
-    startMode: 0,
-    quickPause: { enabled: false, trigger: 1, mouseKey: 5, action: 1, delayMS: 1500 },
-    helpers: {
-      hotkey: 'F5',
-      delayMS: 150,
-      reforgeTarget: 0,
-      devMode: false,
-      enabled: { d3_loot: true, d3_salvage: true }
-    },
-    allHelpers: [
-      { id: 'd3_reforge', name: '魔盒重铸 (连点变换配方)' },
-      { id: 'd3_kanai_convert', name: '魔盒升级/转化材料' },
-      { id: 'd3_gamble', name: '卡达拉快速赌博' },
-      { id: 'd3_loot', name: '快速拾取地上一圈物品' },
-      { id: 'd3_salvage', name: '铁匠处一键快速分解' }
-    ],
-    smartPause: true,
-    soundCue: true,
-    forceStandEnabled: true,
-    forceStandKey: 'SHIFT',
-    macroRunning: true,
-    macroPaused: false,
-    hud: { enabled: true, mode: 'bar', locked: false, gameOnly: true, x: 80, y: 80 },
-    targetProcess: 'Diablo III64.exe'
-  };
+// flashAutoSave 让「改动即时生效」闪一下，给保存成功一个可见反馈。
+function flashAutoSave() {
+  const el = $id('autoSaveIndicator');
+  if (!el) return;
+  el.classList.add('flash');
+  setTimeout(() => el.classList.remove('flash'), 700);
 }
 
-// 供 Go 后端主动调用的状态更新通知
-window.onStateUpdate = function(newState) {
-  state = newState;
-  if (!state) return;
-  const container = document.getElementById('slotList');
-  if (!container || container.children.length === 0) {
-    renderAll();
-  } else {
-    renderPreferences();
-    renderStatusAndHeader();
+// ---------------------------------------------------------------- 启动
+
+onReady(() => {
+  bindHeaderDrag();
+  window.addEventListener('keydown', handleKeyDown, true);
+  bindSlotsDelegation();
+  bindHelperChecklist();
+  bindOverlayDismiss();
+  bootstrap();
+});
+
+async function bootstrap() {
+  // WebView2 注入接口是异步的：轮询等待，但不再用假数据糊弄（宁可显示错误也不显示错的开关）。
+  for (let i = 0; i < 60; i++) {
+    if (typeof window.api_getState === 'function') {
+      const r = await callApi('api_getState');
+      if (r.ok && r.value) {
+        applyState(r.value);
+        renderAll();
+        notifyReady();
+        return;
+      }
+    }
+    await sleep(25);
   }
-};
+  showError('后端接口未就绪：界面处于只读状态，请重启程序或查看运行日志');
+  renderAll();
+  notifyReady();
+}
 
-function renderAll() {
-  if (!state) return;
-  renderHeader();
-  renderTabs();
-  renderSlots();
-  renderExtraSettings();
-  renderHelperSection();
-  renderPreferences();
-  renderStatusAndHeader();
-
-  // 通知宿主窗口：首帧深色界面已完整装配就绪，可平滑显示，避免白屏闪烁
+// notifyReady 只发一次：告诉宿主窗口「首帧深色界面已就绪，可以显示了」。
+function notifyReady() {
+  if (readySent) return;
+  readySent = true;
   if (typeof window.api_ready === 'function') {
     window.api_ready();
   }
 }
 
-// 渲染顶栏游戏按钮与快捷键
-function renderHeader() {
-  document.querySelectorAll('.game-btn').forEach(btn => {
+async function reloadState() {
+  const r = await callApi('api_getState');
+  if (!r.ok || !r.value) return false;
+  applyState(r.value);
+  return true;
+}
+
+// applyState 接管一份新状态：按「变了什么」决定重绘范围，
+// 既保证托盘 / 热键触发的变动能反映到界面，又不会在无关推送时打断正在编辑的输入框。
+function applyState(next) {
+  const prev = state;
+  state = next;
+  currentTab = next.currentProfileIdx || 0;
+
+  const gameChanged = !prev || prev.currentGame !== next.currentGame;
+  const profileChanged = !prev || prev.currentProfileIdx !== next.currentProfileIdx;
+  const digest = stateDigest(next);
+  const dataChanged = digest !== profilesDigest;
+  profilesDigest = digest;
+
+  if (gameChanged) {
+    renderGameSelector();
+    renderHelperSection();
+  }
+  if (gameChanged || profileChanged || dataChanged) {
+    renderTabs();
+    renderSlots();
+    renderExtraSettings();
+  }
+  renderHeaderKeys();
+  renderStatus();
+  renderPreferences();
+}
+
+// window.onStateUpdate 是 Go 主动推送状态的入口：托盘菜单、游戏内方案切换键、悬浮窗右键菜单
+// 引起的变更都从这里进界面。它不是可选的优化——缺了它，凡是界面自己没发起的变更都不会显示。
+window.onStateUpdate = function (next) {
+  if (!next) return;
+  applyState(next);
+};
+
+function renderAll() {
+  profilesDigest = stateDigest(state);
+  renderGameSelector();
+  renderTabs();
+  renderSlots();
+  renderExtraSettings();
+  renderHelperSection();
+  renderPreferences();
+  renderHeaderKeys();
+  renderStatus();
+}
+
+// stateDigest 用来判断「槽位/方案名是否变了」：变了才整体重绘，避免无关推送打断输入框。
+function stateDigest(snapshot) {
+  if (!snapshot) return '';
+  return JSON.stringify(snapshot.profiles) + '|' + JSON.stringify(snapshot.profileNames);
+}
+
+function currentProfile() {
+  if (!state || !state.profiles || !state.profiles[currentTab]) return null;
+  return state.profiles[currentTab];
+}
+
+function slotAt(idx) {
+  const prof = currentProfile();
+  if (!prof || !prof.slots || !prof.slots[idx]) return null;
+  return prof.slots[idx];
+}
+
+// ---------------------------------------------------------------- 渲染
+
+function renderGameSelector() {
+  if (!state) return;
+  document.querySelectorAll('.game-btn').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.game === state.currentGame);
   });
-  const toggleBtn = document.getElementById('toggleKeyBtn');
-  if (toggleBtn) {
-    toggleBtn.textContent = state.toggleKey || 'X1';
+}
+
+function renderHeaderKeys() {
+  if (!state) return;
+  const toggle = $id('toggleKeyBtn');
+  if (toggle) {
+    toggle.textContent = state.toggleKeyLabel || 'X1';
+    toggle.title = '当前启停键：' + (state.toggleKeyLabel || 'X1') + '（点击修改）';
+  }
+  const versionEl = $id('appVersion');
+  if (versionEl && state.version) {
+    versionEl.textContent = 'v' + state.version;
   }
 }
 
-// 渲染方案 Tabs
 function renderTabs() {
-  const tabs = document.querySelectorAll('.tab-btn');
-  tabs.forEach((btn, idx) => {
+  if (!state) return;
+  document.querySelectorAll('.tab-btn').forEach((btn, idx) => {
     btn.classList.toggle('active', idx === currentTab);
-    const profName = state.profileNames[idx] || `配置 ${idx + 1}`;
-    btn.textContent = profName;
+    btn.textContent = state.profileNames[idx] || '配置 ' + (idx + 1);
+    btn.title = '切换到该方案';
   });
 }
 
-// 渲染当前方案的 6 个槽位
 function renderSlots() {
-  const container = document.getElementById('slotList');
+  const container = $id('slotList');
   if (!container) return;
   container.innerHTML = '';
+  const prof = currentProfile();
+  if (!prof || !prof.slots) return;
 
-  const slots = state.profiles[currentTab].slots;
-  const slotLabels = ['技能一:', '技能二:', '技能三:', '技能四:', '左键技能:', '右键技能:'];
-
-  slots.forEach((s, idx) => {
+  prof.slots.forEach((slot, idx) => {
     const row = document.createElement('div');
     row.className = 'slot-row';
-
-    const spam = s.strategy === 2;
-    const buff = s.strategy === 3;
-    const enabledInterval = spam || buff;
-    const enabledTuning = spam;
+    // 整行悬浮说明：把「这个策略到底做什么」直接写在玩家眼前（旧版是分散的 ToolTip，新版集中到 Go 下发文案）
+    row.title = slot.explanation || '';
 
     row.innerHTML = `
-      <span class="col-slot">${slotLabels[idx]}</span>
+      <span class="col-slot">${esc(slot.name || '')}</span>
       <span class="col-key">
-        <button class="keycap-btn sm" onclick="captureSlotKey(${idx})">${s.key || '—'}</button>
+        <button class="keycap-btn sm" data-slot="${idx}" data-field="key"
+          title="当前：${esc(slot.keyLabel || '未选择')} · 点击后按任意键录入（Esc 取消）">${esc(slot.keyLabel || '—')}</button>
       </span>
       <span class="col-strategy">
-        <select class="select-dropdown md" onchange="onStrategyChange(${idx}, this.value)">
-          ${strategyNames.map((name, sIdx) => `<option value="${sIdx}" ${s.strategy === sIdx ? 'selected' : ''}>${name}</option>`).join('')}
+        <select class="select-dropdown md" data-slot="${idx}" data-field="strategy"
+          title="禁用=不自动触发；按住不放=持续按住；连点=按间隔重复；保持Buff=屏幕找色守卫（暗黑3）">
+          ${STRATEGY_NAMES.map((name, sIdx) => `<option value="${sIdx}" ${slot.strategy === sIdx ? 'selected' : ''}>${name}</option>`).join('')}
         </select>
       </span>
       <span class="col-interval">
-        <input type="number" class="input-num sm" value="${s.intervalMS}" min="20" max="600000"
-          ${enabledInterval ? '' : 'disabled'} onchange="onIntervalChange(${idx}, this.value)">
+        <input type="number" class="input-num sm" data-slot="${idx}" data-field="interval"
+          value="${slot.intervalMS}" min="20" max="600000" title="执行间隔（毫秒）：连点/保持Buff 的触发周期"
+          ${slot.strategy === 2 || slot.strategy === 3 ? '' : 'disabled'}>
       </span>
       <span class="col-delay">
-        <input type="number" class="input-num xs" value="${s.delayMS || ''}" placeholder="0" min="-30000" max="30000"
-          ${enabledTuning ? '' : 'disabled'} onchange="onDelayChange(${idx}, this.value)">
+        <input type="number" class="input-num xs" data-slot="${idx}" data-field="delay"
+          value="${slot.delayMS || ''}" placeholder="0" min="-30000" max="30000"
+          title="延迟（毫秒）：正数在本周期内延后，负数推迟到周期末尾前；仅「连点」生效"
+          ${slot.strategy === 2 ? '' : 'disabled'}>
       </span>
       <span class="col-random">
-        <input type="checkbox" ${s.randomDelay ? 'checked' : ''}
-          ${enabledTuning ? '' : 'disabled'} onchange="onRandomChange(${idx}, this.checked)">
+        <input type="checkbox" data-slot="${idx}" data-field="random"
+          title="延迟随机：实际延迟取 0～|延迟| 之间的随机值"
+          ${slot.randomDelay ? 'checked' : ''} ${slot.strategy === 2 ? '' : 'disabled'}>
       </span>
     `;
     container.appendChild(row);
   });
 }
 
-// 渲染左栏额外设置卡片
 function renderExtraSettings() {
-  const prof = state.profiles[currentTab];
-  document.getElementById('profileHkBtn').textContent = prof.hk || '无';
-  document.getElementById('profileNameInput').value = prof.name || `配置 ${currentTab + 1}`;
-  document.getElementById('profileModeSelect').value = prof.mode || 'con';
+  const prof = currentProfile();
+  if (!prof) return;
 
-  document.getElementById('startModeSelect').value = String(state.startMode || 0);
+  // 键帽是纯展示按钮（不是输入控件）：必须直接写文本，不能像输入框那样跳过「有焦点」的元素，
+  // 否则玩家点过它之后，改完键位这里会一直显示旧值。
+  const hkBtn = $id('profileHkBtn');
+  if (hkBtn) {
+    hkBtn.textContent = prof.hkLabel || '无';
+    hkBtn.title = '游戏中按此键秒切本方案（仅键盘键；支持清除）';
+  }
 
-  const qp = state.quickPause;
-  document.getElementById('qpEnabled').checked = qp.enabled;
-  document.getElementById('qpTrigger').value = String(qp.trigger);
-  document.getElementById('qpMouseKey').value = String(qp.mouseKey);
-  document.getElementById('qpAction').value = String(qp.action);
-  document.getElementById('qpDelay').value = qp.delayMS;
+  const nameInput = $id('profileNameInput');
+  if (nameInput && document.activeElement !== nameInput) {
+    nameInput.value = prof.name || '配置 ' + (currentTab + 1);
+  }
+
+  const modeSelect = $id('profileModeSelect');
+  if (modeSelect) {
+    modeSelect.value = prof.mode || 'con';
+    modeSelect.title = '并发按键：各技能各自计时、到点就按；循环按键：按槽位顺序一轮一轮按';
+  }
+
+  const startSelect = $id('startModeSelect');
+  if (startSelect && state) startSelect.value = String(state.startMode || 0);
+
+  const qp = state && state.quickPause;
+  if (!qp) return;
+  setCheckedIfIdle($id('qpEnabled'), qp.enabled);
+  setValueIfIdle($id('qpTrigger'), String(qp.trigger));
+  setValueIfIdle($id('qpMouseKey'), String(qp.mouseKey));
+  setValueIfIdle($id('qpAction'), String(qp.action));
+  setValueIfIdle($id('qpDelay'), qp.delayMS);
 }
 
-// 渲染右栏城镇助手 (暗黑3显示，非暗黑3隐藏)
 function renderHelperSection() {
+  if (!state) return;
   const isD3 = state.currentGame === 'd3';
-  const helperCard = document.getElementById('helperCard');
-  if (helperCard) {
-    helperCard.style.display = isD3 ? 'flex' : 'none';
-  }
+  const helperCard = $id('helperCard');
+  if (helperCard) helperCard.style.display = isD3 ? 'flex' : 'none';
   if (!isD3) return;
 
-  const h = state.helpers;
-  document.getElementById('helperHotkeyInput').value = h.hotkey || 'F';
-  document.getElementById('helperSpeedSelect').value = String(h.delayMS || 150);
-  document.getElementById('reforgeTargetSelect').value = String(h.reforgeTarget || 0);
-  document.getElementById('helperDevCheck').checked = !!h.devMode;
+  const h = state.helpers || {};
+  const hotkeyBtn = $id('helperHotkeyBtn');
+  if (hotkeyBtn) hotkeyBtn.textContent = h.hotkeyLabel || '无';
 
-  const checklist = document.getElementById('helperChecklist');
-  if (checklist && state.allHelpers) {
-    const enabledMap = (h && h.enabled) || {};
-    checklist.innerHTML = state.allHelpers.map(item => `
-      <label class="checkbox-label helper-check-item">
-        <input type="checkbox" value="${item.id}" ${enabledMap[item.id] ? 'checked' : ''} onchange="saveHelperSettings()">
-        <span>${item.name}</span>
-      </label>
-    `).join('');
-  }
+  setValueIfIdle($id('helperSpeedSelect'), String(h.delayMS || 150));
+  setValueIfIdle($id('reforgeTargetSelect'), String(h.reforgeTarget || 0));
+  setCheckedIfIdle($id('helperDevCheck'), !!h.devMode);
+
+  const checklist = $id('helperChecklist');
+  if (!checklist) return;
+  checklist.innerHTML = '';
+  const enabledMap = h.enabled || {};
+  (state.allHelpers || []).forEach((item) => {
+    const label = document.createElement('label');
+    label.className = 'checkbox-label helper-check-item';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.value = item.id;
+    box.checked = !!enabledMap[item.id];
+    const text = document.createElement('span');
+    text.textContent = item.name;
+    label.appendChild(box);
+    label.appendChild(text);
+    checklist.appendChild(label);
+  });
 }
 
-// 渲染右栏偏好设置
 function renderPreferences() {
-  document.getElementById('smartPauseCheck').checked = !!state.smartPause;
-  document.getElementById('soundCueCheck').checked = !!state.soundCue;
-  document.getElementById('forceStandCheck').checked = !!state.forceStandEnabled;
-  document.getElementById('forceStandKeyBtn').textContent = state.forceStandKey || 'Shift';
+  if (!state) return;
+  setCheckedIfIdle($id('smartPauseCheck'), !!state.smartPause);
+  setCheckedIfIdle($id('soundCueCheck'), !!state.soundCue);
+  setCheckedIfIdle($id('forceStandCheck'), !!state.forceStandEnabled);
 
-  if (state.hud) {
-    const hudEnabled = document.getElementById('hudEnabledCheck');
-    if (hudEnabled) hudEnabled.checked = !!state.hud.enabled;
-    const hudMode = document.getElementById('hudModeSelect');
-    if (hudMode) hudMode.value = state.hud.mode || 'bar';
-    const hudLocked = document.getElementById('hudLockedCheck');
-    if (hudLocked) hudLocked.checked = !!state.hud.locked;
-    const hudGameOnly = document.getElementById('hudGameOnlyCheck');
-    if (hudGameOnly) hudGameOnly.checked = !!state.hud.gameOnly;
+  const standBtn = $id('forceStandKeyBtn');
+  if (standBtn) {
+    standBtn.textContent = state.forceStandKeyLabel || 'Shift';
+    standBtn.title = '连点左键技能前先按住的键（仅键盘键；可清除为游戏默认键）';
+  }
+
+  const hud = state.hud;
+  if (!hud) return;
+  setCheckedIfIdle($id('hudEnabledCheck'), !!hud.enabled);
+  setValueIfIdle($id('hudModeSelect'), hud.mode || 'bar');
+  setCheckedIfIdle($id('hudLockedCheck'), !!hud.locked);
+  setCheckedIfIdle($id('hudGameOnlyCheck'), !!hud.gameOnly);
+
+  // 悬浮窗关闭时把子选项置灰：避免出现「改了半天没反应」的错觉。
+  const optionsRow = $id('hudOptionsRow');
+  if (optionsRow) {
+    optionsRow.classList.toggle('disabled', !hud.enabled);
+    optionsRow.querySelectorAll('select, input').forEach((el) => {
+      el.disabled = !hud.enabled;
+    });
   }
 }
 
-// 渲染底部状态与标题
-function renderStatusAndHeader() {
-  const profName = state.profileNames[currentTab] || `配置 ${currentTab + 1}`;
-  document.getElementById('activeProfileText').textContent = profName;
-  document.getElementById('targetProcessText').textContent = state.targetProcess || 'Diablo.exe';
+function renderStatus() {
+  if (!state) return;
+  const profName = (state.profileNames && state.profileNames[currentTab]) || '配置 ' + (currentTab + 1);
+  const activeEl = $id('activeProfileText');
+  if (activeEl) activeEl.textContent = profName;
 
-  const pill = document.getElementById('macroStatusPill');
-  if (pill) {
-    if (state.macroRunning) {
-      pill.className = 'status-tag running';
-      pill.textContent = `● 宏运行中 (按 ${state.toggleKey} 停止)`;
-    } else if (state.macroPaused) {
-      pill.className = 'status-tag paused';
-      pill.textContent = `⏸ 宏已暂停 (按 ${state.toggleKey} 恢复)`;
-    } else {
-      pill.className = 'status-tag ready';
-      pill.textContent = `● 宏已就绪 (前台生效 · 按 ${state.toggleKey} 启动)`;
-    }
+  const targetEl = $id('targetProcessText');
+  if (targetEl) targetEl.textContent = state.targetProcess || '—';
+
+  const pill = $id('macroStatusPill');
+  if (!pill) return;
+  const engine = state.engine || {};
+  if (!engine.configured) {
+    pill.className = 'status-tag dormant';
+    pill.textContent = '○ 未配置（请导入分享码或编辑规则）';
+    return;
   }
+  pill.className = 'status-tag ' + (engine.status || 'ready');
+  pill.textContent = engine.statusText || '';
 }
 
-// ================= 用户交互动作 =================
+// 轻量写值助手：正在被编辑（焦点所在）的控件不覆盖，避免推送打断输入。
+function setValueIfIdle(el, value) {
+  if (!el || el === document.activeElement) return;
+  if (el.value !== value) el.value = value;
+}
+
+function setCheckedIfIdle(el, value) {
+  if (!el || el === document.activeElement) return;
+  if (el.checked !== value) el.checked = value;
+}
+
+// ---------------------------------------------------------------- 用户动作
 
 async function switchGame(gameID) {
-  if (state.currentGame === gameID) return;
-  await window.api_switchGame(gameID);
+  if (!state || state.currentGame === gameID) return;
+  const r = await callApi('api_switchGame', gameID);
+  if (!r.ok) return;
+  await reloadState();
+  flashAutoSave();
+}
+
+async function switchTab(idx) {
+  if (idx === currentTab) return;
+  const r = await callApi('api_switchProfile', idx);
+  if (!r.ok) return;
   await reloadState();
 }
 
-function switchTab(idx) {
-  currentTab = idx;
-  window.api_switchProfile(idx);
-  renderTabs();
-  renderSlots();
-  renderExtraSettings();
-  renderStatusAndHeader();
+function bindSlotsDelegation() {
+  const container = $id('slotList');
+  if (!container) return;
+
+  container.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-field="key"]');
+    if (!btn) return;
+    openCapture('slot', { slotIdx: Number(btn.dataset.slot) });
+  });
+
+  container.addEventListener('change', async (e) => {
+    const el = e.target;
+    const slotIdx = Number(el.dataset.slot);
+    if (!Number.isInteger(slotIdx)) return;
+    const slot = slotAt(slotIdx);
+    if (!slot) return;
+
+    let key = slot.key;
+    let strategy = slot.strategy;
+    let interval = slot.intervalMS;
+    let delay = slot.delayMS;
+    let random = slot.randomDelay;
+
+    switch (el.dataset.field) {
+      case 'strategy':
+        strategy = parseInt(el.value, 10) || 0;
+        break;
+      case 'interval':
+        interval = parseInt(el.value, 10) || 0;
+        break;
+      case 'delay':
+        delay = parseInt(el.value, 10) || 0;
+        break;
+      case 'random':
+        random = el.checked;
+        break;
+      default:
+        return;
+    }
+    await commitSlot(slotIdx, key, strategy, interval, delay, random);
+  });
 }
 
-// 槽位字段变更即时落盘
-async function onStrategyChange(slotIdx, val) {
-  const s = state.profiles[currentTab].slots[slotIdx];
-  s.strategy = parseInt(val, 10);
-  await sendSlotUpdate(slotIdx);
-  renderSlots();
-}
-
-async function onIntervalChange(slotIdx, val) {
-  const s = state.profiles[currentTab].slots[slotIdx];
-  s.intervalMS = Math.max(20, parseInt(val, 10) || 300);
-  await sendSlotUpdate(slotIdx);
-}
-
-async function onDelayChange(slotIdx, val) {
-  const s = state.profiles[currentTab].slots[slotIdx];
-  s.delayMS = parseInt(val, 10) || 0;
-  await sendSlotUpdate(slotIdx);
-}
-
-async function onRandomChange(slotIdx, checked) {
-  const s = state.profiles[currentTab].slots[slotIdx];
-  s.randomDelay = checked;
-  await sendSlotUpdate(slotIdx);
-}
-
-async function sendSlotUpdate(slotIdx) {
-  const s = state.profiles[currentTab].slots[slotIdx];
-  await window.api_updateSlot(currentTab, slotIdx, s.key, s.strategy, s.intervalMS, s.delayMS, s.randomDelay);
+async function commitSlot(slotIdx, key, strategy, interval, delay, random) {
+  const r = await callApi('api_updateSlot', currentTab, slotIdx, key, strategy, interval, delay, random);
+  if (!r.ok) {
+    // 失败时把控件恢复成后端实际保存的值（可能是被夹取/拒绝后的结果）
+    await reloadState();
+    renderSlots();
+    return;
+  }
+  await reloadState();
   flashAutoSave();
 }
 
 async function saveProfileName() {
-  const name = document.getElementById('profileNameInput').value.trim() || `配置 ${currentTab + 1}`;
-  state.profiles[currentTab].name = name;
-  state.profileNames[currentTab] = name;
-  await window.api_updateProfileMeta(currentTab, name, state.profiles[currentTab].hk, state.profiles[currentTab].mode);
-  renderTabs();
-  renderStatusAndHeader();
+  const prof = currentProfile();
+  const input = $id('profileNameInput');
+  if (!prof || !input) return;
+  const name = input.value.trim() || '配置 ' + (currentTab + 1);
+  const r = await callApi('api_updateProfileMeta', currentTab, name, prof.hk, prof.mode);
+  if (!r.ok) {
+    await reloadState();
+    return;
+  }
+  await reloadState();
   flashAutoSave();
 }
 
 async function saveProfileMode() {
-  const mode = document.getElementById('profileModeSelect').value;
-  state.profiles[currentTab].mode = mode;
-  await window.api_updateProfileMeta(currentTab, state.profiles[currentTab].name, state.profiles[currentTab].hk, mode);
+  const prof = currentProfile();
+  const sel = $id('profileModeSelect');
+  if (!prof || !sel) return;
+  const r = await callApi('api_updateProfileMeta', currentTab, prof.name, prof.hk, sel.value);
+  if (!r.ok) {
+    await reloadState();
+    return;
+  }
+  await reloadState();
   flashAutoSave();
 }
 
 async function saveStartMode() {
-  const mode = parseInt(document.getElementById('startModeSelect').value, 10);
-  state.startMode = mode;
-  await window.api_updateStartMode(mode);
+  const sel = $id('startModeSelect');
+  if (!sel) return;
+  const r = await callApi('api_updateStartMode', parseInt(sel.value, 10) || 0);
+  if (!r.ok) {
+    await reloadState();
+    return;
+  }
+  await reloadState();
   flashAutoSave();
 }
 
 async function saveQuickPause() {
-  const enabled = document.getElementById('qpEnabled').checked;
-  const trigger = parseInt(document.getElementById('qpTrigger').value, 10);
-  const mouseKey = parseInt(document.getElementById('qpMouseKey').value, 10);
-  const action = parseInt(document.getElementById('qpAction').value, 10);
-  const delay = Math.max(500, Math.min(5000, parseInt(document.getElementById('qpDelay').value, 10) || 1000));
-  await window.api_updateQuickPause(enabled, trigger, mouseKey, action, delay);
+  const r = await callApi(
+    'api_updateQuickPause',
+    $id('qpEnabled').checked,
+    parseInt($id('qpTrigger').value, 10) || 0,
+    parseInt($id('qpMouseKey').value, 10) || 0,
+    parseInt($id('qpAction').value, 10) || 0,
+    parseInt($id('qpDelay').value, 10) || 0
+  );
+  if (!r.ok) {
+    await reloadState();
+    return;
+  }
+  await reloadState();
   flashAutoSave();
 }
 
 async function saveHelperSettings() {
-  const hotkey = document.getElementById('helperHotkeyInput').value.trim() || 'F';
-  const speed = parseInt(document.getElementById('helperSpeedSelect').value, 10);
-  const target = parseInt(document.getElementById('reforgeTargetSelect').value, 10);
-  const dev = document.getElementById('helperDevCheck').checked;
-
+  const hotkey = (state && state.helpers && state.helpers.hotkey) || '';
+  const speed = parseInt($id('helperSpeedSelect').value, 10) || 0;
+  const target = parseInt($id('reforgeTargetSelect').value, 10) || 0;
+  const dev = $id('helperDevCheck').checked;
   const enabled = [];
-  document.querySelectorAll('#helperChecklist input[type="checkbox"]:checked').forEach(cb => {
+  document.querySelectorAll('#helperChecklist input[type="checkbox"]:checked').forEach((cb) => {
     enabled.push(cb.value);
   });
 
-  await window.api_updateHelpers(hotkey, speed, target, dev, enabled);
+  const r = await callApi('api_updateHelpers', hotkey, speed, target, dev, enabled);
+  if (!r.ok) {
+    await reloadState();
+    renderHelperSection();
+    return;
+  }
+  await reloadState();
+  renderHelperSection();
   flashAutoSave();
 }
 
 async function savePreferences() {
-  const smart = document.getElementById('smartPauseCheck').checked;
-  const sound = document.getElementById('soundCueCheck').checked;
-  const force = document.getElementById('forceStandCheck').checked;
-  await window.api_updatePreference(smart, sound, force, state.forceStandKey || 'Shift');
+  if (!state) return;
+  const r = await callApi(
+    'api_updatePreference',
+    $id('smartPauseCheck').checked,
+    $id('soundCueCheck').checked,
+    $id('forceStandCheck').checked,
+    state.forceStandKey || ''
+  );
+  if (!r.ok) {
+    await reloadState();
+    return;
+  }
+  await reloadState();
   flashAutoSave();
 }
 
-async function saveForceStand() {
-  await savePreferences();
-}
-
 async function saveHUDSettings() {
-  const enabled = document.getElementById('hudEnabledCheck').checked;
-  const mode = document.getElementById('hudModeSelect').value;
-  const locked = document.getElementById('hudLockedCheck').checked;
-  const gameOnly = document.getElementById('hudGameOnlyCheck').checked;
-  if (state.hud) {
-    state.hud.enabled = enabled;
-    state.hud.mode = mode;
-    state.hud.locked = locked;
-    state.hud.gameOnly = gameOnly;
+  const r = await callApi(
+    'api_updateHUD',
+    $id('hudEnabledCheck').checked,
+    $id('hudModeSelect').value,
+    $id('hudLockedCheck').checked,
+    $id('hudGameOnlyCheck').checked
+  );
+  if (!r.ok) {
+    await reloadState();
+    return;
   }
-  await window.api_updateHUD(enabled, mode, locked, gameOnly);
+  await reloadState();
   flashAutoSave();
 }
 
 async function resetHUDPos() {
-  await window.api_resetHUDPos();
-  flashAutoSave();
+  const r = await callApi('api_resetHUDPos');
+  if (!r.ok) return;
+  showNotice('悬浮窗位置已复位到左上角', 'ok');
 }
 
-// ================= 按键捕获模态系统 =================
-
-function openCaptureModal(target) {
-  capturingTarget = target;
-  document.getElementById('captureOverlay').style.display = 'flex';
+function bindHelperChecklist() {
+  const checklist = $id('helperChecklist');
+  if (checklist) checklist.addEventListener('change', saveHelperSettings);
 }
 
-function closeCaptureModal() {
-  capturingTarget = null;
-  document.getElementById('captureOverlay').style.display = 'none';
+// ---------------------------------------------------------------- 按键捕获
+
+async function openCapture(mode, target) {
+  const r = await callApi('api_captureOptions', mode);
+  if (!r.ok) return;
+  capture = { mode: mode, target: target || {}, options: r.value || {} };
+  renderCaptureBox();
+  const overlay = $id('captureOverlay');
+  if (overlay) overlay.style.display = 'flex';
 }
 
-function captureSlotKey(slotIdx) {
-  openCaptureModal({ type: 'slot', index: slotIdx });
-}
-
+// 顶栏 / 方案 / 偏好 / 助手四处键位的捕获入口（可选行为由 Go 的 captureOptions 决定）
+// 统一 return，便于外部（含自动化验证）await 到浮层真正就绪。
 function captureToggleKey() {
-  openCaptureModal({ type: 'toggle' });
+  return openCapture('toggle');
 }
 
 function captureProfileHk() {
-  openCaptureModal({ type: 'profileHk' });
+  return openCapture('profileHk');
 }
 
 function captureForceStandKey() {
-  openCaptureModal({ type: 'forceStand' });
+  return openCapture('forceStand');
 }
 
-function onOverlayClick(e) {
-  if (e.target && e.target.id === 'captureOverlay') {
-    closeCaptureModal();
+function captureHelperKey() {
+  return openCapture('helperKey');
+}
+
+// 强制站立键与偏好设置同属一份工具设置，改动一并提交。
+function saveForceStand() {
+  savePreferences();
+}
+
+function renderCaptureBox() {
+  const box = $id('captureBox');
+  if (!box || !capture) return;
+  const opts = capture.options;
+  const mouseButtons = [
+    ['LMB', '鼠标左键'],
+    ['RMB', '鼠标右键'],
+    ['MMB', '鼠标中键'],
+    ['X1', '侧键1'],
+    ['X2', '侧键2'],
+  ];
+
+  let html = '<div class="capture-title">' + esc(opts.title || '请按下按键') + '</div>';
+  if (opts.hint) html += '<div class="capture-hint">' + esc(opts.hint) + '</div>';
+  if (opts.mouseAllowed) {
+    html += '<div class="capture-mouse-options">' +
+      mouseButtons.map(([token, label]) => '<button class="tool-btn" data-key="' + token + '">' + label + '</button>').join('') +
+      '</div>';
   }
+  const extras = [];
+  if (opts.clearLabel) extras.push('<button class="tool-btn" data-key="">' + esc(opts.clearLabel) + '</button>');
+  if (opts.defaultLabel) extras.push('<button class="tool-btn" data-key="' + esc(opts.defaultToken || '') + '">' + esc(opts.defaultLabel) + '</button>');
+  if (extras.length) html += '<div class="capture-extras">' + extras.join('') + '</div>';
+  html += '<div class="capture-sub">（按 Escape 或点击背景取消）</div><div class="capture-pulse"></div>';
+  box.innerHTML = html;
+
+  box.querySelectorAll('button[data-key]').forEach((btn) => {
+    btn.addEventListener('click', () => submitCapturedKey(btn.dataset.key));
+  });
 }
 
-async function applyCapturedKey(token) {
-  if (!capturingTarget) return;
-  const t = capturingTarget;
-  closeCaptureModal();
+function closeCapture() {
+  capture = null;
+  const overlay = $id('captureOverlay');
+  if (overlay) overlay.style.display = 'none';
+}
 
-  if (t.type === 'slot') {
-    state.profiles[currentTab].slots[t.index].key = token;
-    await sendSlotUpdate(t.index);
-    renderSlots();
-  } else if (t.type === 'toggle') {
-    state.toggleKey = token;
-    await window.api_updateToggle(token);
-    renderHeader();
-  } else if (t.type === 'profileHk') {
-    state.profiles[currentTab].hk = token;
-    await window.api_updateProfileMeta(currentTab, state.profiles[currentTab].name, token, state.profiles[currentTab].mode);
-    renderExtraSettings();
-  } else if (t.type === 'forceStand') {
-    state.forceStandKey = token;
-    await window.api_updatePreference(state.smartPause, state.soundCue, state.forceStandEnabled, token);
-    renderPreferences();
+function bindOverlayDismiss() {
+  const overlay = $id('captureOverlay');
+  if (overlay) {
+    overlay.addEventListener('mousedown', (e) => {
+      if (e.target === overlay) closeCapture();
+    });
+  }
+  const importOverlay = $id('importOverlay');
+  if (importOverlay) {
+    importOverlay.addEventListener('mousedown', (e) => {
+      if (e.target === importOverlay) closeImport();
+    });
   }
 }
 
 async function handleKeyDown(e) {
-  if (!capturingTarget) return;
-
+  if (!capture) return;
   e.preventDefault();
   e.stopPropagation();
-
   if (e.key === 'Escape') {
-    closeCaptureModal();
+    closeCapture();
     return;
   }
-
-  // 映射按键名
-  let token = e.key.toUpperCase();
-  if (token === ' ') token = 'SPACE';
-  if (token === 'CONTROL') token = 'LCTRL';
-  if (token === 'SHIFT') token = 'LSHIFT';
-  if (token === 'ALT') token = 'LALT';
-
-  await applyCapturedKey(token);
+  // 优先用 KeyboardEvent.code（布局无关），退回 key；合法性由 Go 判定。
+  await submitCapturedKey(e.code || e.key || '');
 }
 
-// 快捷操作
+// submitCapturedKey 把原始键名交给 Go 校验：不合法就在提示条里说明原因（例如「方案切换键不支持鼠标键」）。
+async function submitCapturedKey(rawKey) {
+  if (!capture) return;
+  const current = capture;
+  const r = await callApi('api_captureKey', current.mode, rawKey);
+  if (!r.ok) return;
+  closeCapture();
+  await applyCapturedKey(current, r.value.token, r.value.label);
+}
+
+async function applyCapturedKey(target, token, label) {
+  const prof = currentProfile();
+  if (!prof) return;
+  let result = { ok: true };
+
+  switch (target.mode) {
+    case 'slot': {
+      const slot = slotAt(target.target.slotIdx);
+      if (!slot) return;
+      result = await callApi('api_updateSlot', currentTab, target.target.slotIdx, token,
+        slot.strategy, slot.intervalMS, slot.delayMS, slot.randomDelay);
+      break;
+    }
+    case 'toggle':
+      result = await callApi('api_updateToggle', token);
+      break;
+    case 'profileHk':
+      result = await callApi('api_updateProfileMeta', currentTab, prof.name, token, prof.mode);
+      break;
+    case 'forceStand':
+      result = await callApi('api_updatePreference',
+        $id('smartPauseCheck').checked, $id('soundCueCheck').checked,
+        $id('forceStandCheck').checked, token);
+      break;
+    case 'helperKey': {
+      const enabled = [];
+      document.querySelectorAll('#helperChecklist input[type="checkbox"]:checked').forEach((cb) => {
+        enabled.push(cb.value);
+      });
+      result = await callApi('api_updateHelpers', token,
+        parseInt($id('helperSpeedSelect').value, 10) || 0,
+        parseInt($id('reforgeTargetSelect').value, 10) || 0,
+        $id('helperDevCheck').checked, enabled);
+      break;
+    }
+    default:
+      return;
+  }
+
+  await reloadState();
+  if (result.ok) {
+    showNotice('已绑定为「' + (label || token) + '」', 'ok');
+    flashAutoSave();
+  }
+}
+
+// ---------------------------------------------------------------- 分享码
+
 async function importCode() {
-  const ok = await window.api_importClipboard();
-  if (ok) await reloadState();
+  const r = await callApi('api_previewImport');
+  if (!r.ok) return;
+  const preview = $id('importPreview');
+  if (preview) preview.textContent = r.value || '';
+  const overlay = $id('importOverlay');
+  if (overlay) overlay.style.display = 'flex';
+}
+
+function closeImport() {
+  const overlay = $id('importOverlay');
+  if (overlay) overlay.style.display = 'none';
+}
+
+async function confirmImport() {
+  closeImport();
+  const r = await callApi('api_applyImport');
+  if (!r.ok) return;
+  await reloadState();
+  showNotice('配置已导入并生效', 'ok');
 }
 
 async function exportCode() {
-  await window.api_exportClipboard();
+  const r = await callApi('api_exportClipboard');
+  if (!r.ok) return;
+  const len = (r.value || '').length;
+  showNotice('分享码已复制到剪贴板（' + len + ' 字符），可直接发给好友', 'ok');
 }
 
 function openLog() {
-  window.api_openLogWindow();
+  callApi('api_openLogWindow');
 }
 
 function minimizeWindow() {
-  window.api_minimize();
+  callApi('api_minimize');
 }
 
 function closeWindow() {
-  window.api_close();
+  callApi('api_close');
 }
 
-function flashAutoSave() {
-  const el = document.getElementById('autoSaveIndicator');
-  if (el) {
-    el.style.opacity = '1';
-    el.textContent = '✓ 实时生效';
-  }
+// ---------------------------------------------------------------- 顶栏拖拽
+
+function bindHeaderDrag() {
+  const header = $id('appHeader');
+  if (!header) return;
+  header.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    if (e.target.closest('button, input, select, label')) return;
+    if (typeof window.api_dragWindow === 'function') {
+      window.api_dragWindow();
+    }
+  });
 }

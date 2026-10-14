@@ -14,7 +14,7 @@
       <span class="brand-version" id="appVersion">v0.2.0</span>
     </div>
 
-    <!-- 游戏切换按钮组 (分段式胶囊) -->
+    <!-- 游戏切换按钮组 -->
     <div class="game-selector">
       <button class="game-btn active" data-game="d3" onclick="switchGame('d3')">暗黑破坏神 3</button>
       <button class="game-btn" data-game="d4" onclick="switchGame('d4')">暗黑破坏神 4</button>
@@ -24,20 +24,24 @@
     <!-- 全局战斗宏启动快捷键 (通用全局控件) -->
     <div class="header-macro-toggle">
       <span class="header-macro-label">战斗宏启停：</span>
-      <button class="keycap-btn highlight header-keycap" id="toggleKeyBtn" onclick="captureToggleKey()" title="点击修改战斗宏启停快捷键">X1</button>
+      <button class="keycap-btn highlight header-keycap" id="toggleKeyBtn"
+        onclick="captureToggleKey()" title="点击修改战斗宏启停快捷键">X1</button>
     </div>
 
     <!-- 快捷工具按钮组 -->
     <div class="header-tools">
-      <button class="tool-btn" onclick="importCode()" title="从剪贴板导入分享码">导入分享码</button>
+      <button class="tool-btn" onclick="importCode()" title="从剪贴板读取分享码，确认后导入">导入分享码</button>
       <button class="tool-btn" onclick="exportCode()" title="将当前配置复制为分享码">复制分享码</button>
       <button class="tool-btn" onclick="openLog()" title="查看运行日志">运行日志</button>
       <div class="win-controls">
-        <button class="win-btn win-min" onclick="minimizeWindow()" title="最小化到托盘">—</button>
-        <button class="win-btn win-close" onclick="closeWindow()" title="隐藏到托盘">✕</button>
+        <button class="win-btn win-min" onclick="minimizeWindow()" title="最小化窗口(任务栏)">—</button>
+        <button class="win-btn win-close" onclick="closeWindow()" title="隐藏到托盘（宏继续运行）">✕</button>
       </div>
     </div>
   </header>
+
+  <!-- 提示条：保存失败、导入结果、键位绑定反馈都走这里，不再静默 -->
+  <div class="notice-bar" id="noticeBar" style="display: none;"></div>
 
   <!-- 主体工作区：左右双栏对称仪表盘 -->
   <main class="app-main">
@@ -59,15 +63,21 @@
           <div class="slot-header">
             <span class="col-slot">技能槽位</span>
             <span class="col-key">快捷键</span>
-            <span class="col-strategy">释放策略</span>
-            <span class="col-interval">执行间隔 (ms)</span>
-            <span class="col-delay">延迟 (ms)</span>
-            <span class="col-random">±随机</span>
+            <span class="col-strategy" title="禁用=不自动触发；按住不放=持续按住；连点=按间隔重复；保持Buff=屏幕找色守卫（暗黑3）">释放策略</span>
+            <span class="col-interval" title="连点与保持Buff 的触发周期（毫秒）">执行间隔 (ms)</span>
+            <span class="col-delay" title="正数在本周期内延后，负数推迟到周期末尾前；仅「连点」生效">延迟 (ms)</span>
+            <span class="col-random" title="延迟随机：实际延迟取 0～|延迟| 之间的随机值">±随机</span>
           </div>
 
           <!-- 6 行槽位容器 (动态渲染) -->
           <div class="slot-list" id="slotList">
             <!-- 由 JS 渲染 6 行槽位 -->
+          </div>
+
+          <div class="card-hints">
+            <div class="hint-line">快捷键按钮点击后按任意键即可录入（Esc 取消）；支持鼠标左/右/中键与侧键。</div>
+            <div class="hint-line">延迟：正数在周期内延后、负数推迟到周期末尾前；与所选策略无关的列会自动置灰。</div>
+            <div class="hint-line">策略为「禁用」的槽位不写入配置：改键位只在本次运行内保留，启用策略后才会落盘。</div>
           </div>
         </div>
       </div>
@@ -82,11 +92,12 @@
           </div>
           <div class="form-item">
             <span class="form-label">配置名：</span>
-            <input type="text" class="input-text sm" id="profileNameInput" onchange="saveProfileName()" maxlength="12" placeholder="配置 1">
+            <input type="text" class="input-text sm" id="profileNameInput" onchange="saveProfileName()" maxlength="24" placeholder="配置 1">
           </div>
           <div class="form-item">
             <span class="form-label">按键模式：</span>
-            <select class="select-dropdown md" id="profileModeSelect" onchange="saveProfileMode()">
+            <select class="select-dropdown md" id="profileModeSelect" onchange="saveProfileMode()"
+              title="并发按键：各技能各自计时、到点就按；循环按键：按槽位顺序一轮一轮按">
               <option value="con">并发按键</option>
               <option value="seq">循环按键</option>
             </select>
@@ -96,7 +107,8 @@
         <div class="extra-row">
           <div class="form-item">
             <span class="form-label">宏启动方式：</span>
-            <select class="select-dropdown lg" id="startModeSelect" onchange="saveStartMode()">
+            <select class="select-dropdown lg" id="startModeSelect" onchange="saveStartMode()"
+              title="懒人模式：按一下启停键切换开/关；仅按下时：按住启停键期间才生效">
               <option value="0">懒人模式 (开关切换)</option>
               <option value="1">仅按下时 (按住生效)</option>
             </select>
@@ -109,12 +121,12 @@
               <input type="checkbox" id="qpEnabled" onchange="saveQuickPause()">
               <span>快速暂停：</span>
             </label>
-            <select class="select-dropdown xs" id="qpTrigger" onchange="saveQuickPause()">
+            <select class="select-dropdown xs" id="qpTrigger" onchange="saveQuickPause()" title="鼠标键的触发方式">
               <option value="1">双击</option>
               <option value="2">单击</option>
               <option value="3">压住</option>
             </select>
-            <select class="select-dropdown sm" id="qpMouseKey" onchange="saveQuickPause()">
+            <select class="select-dropdown sm" id="qpMouseKey" onchange="saveQuickPause()" title="用哪个鼠标键触发">
               <option value="1">左键</option>
               <option value="2">右键</option>
               <option value="3">中键</option>
@@ -122,11 +134,12 @@
               <option value="5">侧键2</option>
             </select>
             <span class="form-text">则</span>
-            <select class="select-dropdown lg" id="qpAction" onchange="saveQuickPause()">
+            <select class="select-dropdown lg" id="qpAction" onchange="saveQuickPause()" title="暂停期间的行为">
               <option value="1">暂停按键宏</option>
               <option value="2">暂停且连点左键</option>
             </select>
-            <input type="number" class="input-num xs" id="qpDelay" onchange="saveQuickPause()" min="500" max="5000" placeholder="1500">
+            <input type="number" class="input-num xs" id="qpDelay" onchange="saveQuickPause()" min="500" max="5000"
+              placeholder="1500" title="单击/双击模式的暂停时长（500–5000 毫秒）">
             <span class="form-text">ms</span>
           </div>
         </div>
@@ -138,15 +151,17 @@
 
       <!-- 辅助功能卡片 (暗黑3下显示完整功能，非暗黑3下纯净隐藏) -->
       <div class="card helper-card" id="helperCard">
-        <div class="card-title accent">辅助功能 (暗黑 3 专属)</div>
+        <div class="card-title accent">辅助功能 (暗黑 3 专属 · 黄区功能请自行评估风险)</div>
         <div class="helper-controls">
           <div class="form-item">
             <span class="form-label accent">助手宏快捷键：</span>
-            <input type="text" class="input-text xs" id="helperHotkeyInput" onchange="saveHelperSettings()" maxlength="8" placeholder="F5">
+            <button class="keycap-btn sm" id="helperHotkeyBtn" onclick="captureHelperKey()"
+              title="游戏中按一下触发助手，运行中再按一下可打断">无</button>
           </div>
           <div class="form-item">
             <span class="form-label">动作速度：</span>
-            <select class="select-dropdown sm" id="helperSpeedSelect" onchange="saveHelperSettings()">
+            <select class="select-dropdown sm" id="helperSpeedSelect" onchange="saveHelperSettings()"
+              title="每个动作之间的等待时长，太快会丢点击">
               <option value="50">极快 (50ms)</option>
               <option value="100">快速 (100ms)</option>
               <option value="150">标准 (150ms)</option>
@@ -159,7 +174,8 @@
         <div class="helper-controls">
           <div class="form-item">
             <span class="form-label">魔盒重铸目标：</span>
-            <select class="select-dropdown sm" id="reforgeTargetSelect" onchange="saveHelperSettings()">
+            <select class="select-dropdown sm" id="reforgeTargetSelect" onchange="saveHelperSettings()"
+              title="重铸到该品质即停（上限 30 次）">
               <option value="0">只重铸一次</option>
               <option value="2">普通传奇</option>
               <option value="3">远古传奇</option>
@@ -168,7 +184,7 @@
             </select>
           </div>
           <div class="form-item">
-            <label class="checkbox-label sm">
+            <label class="checkbox-label sm" title="输出每一步取色与判定，便于复现问题">
               <input type="checkbox" id="helperDevCheck" onchange="saveHelperSettings()">
               <span>开发者日志</span>
             </label>
@@ -180,26 +196,26 @@
           <!-- 由 JS 渲染助手复选框 -->
         </div>
 
-        <div class="helper-note">* 城镇助手要求游戏窗口化或无边框窗口化运行</div>
+        <div class="helper-note">* 城镇助手要求游戏窗口化或无边框窗口化运行；默认全部关闭，仅在当前界面命中时才动作。</div>
       </div>
 
       <!-- 操作偏好与防护卡片 -->
       <div class="card pref-card">
         <div class="card-title">操作偏好与防护</div>
         <div class="pref-list">
-          <label class="checkbox-label">
+          <label class="checkbox-label" title="Tab 暂停/恢复；回车(打字)、T(回城)、M(地图) 自动停止宏">
             <input type="checkbox" id="smartPauseCheck" onchange="savePreferences()">
             <span>智能暂停 (Tab/回车/T/M)</span>
           </label>
           <div class="pref-desc">按 Tab 暂停/恢复；回车(打字)、T(回城)、M(地图) 自动停止宏</div>
 
-          <label class="checkbox-label">
+          <label class="checkbox-label" title="按热键切换配置成功时播放提示音">
             <input type="checkbox" id="soundCueCheck" onchange="savePreferences()">
             <span>快捷键切换配置成功时播放提示音</span>
           </label>
 
           <div class="pref-force-stand">
-            <label class="checkbox-label">
+            <label class="checkbox-label" title="连点左键技能前先按住站立键，避免角色走动（暗黑3）">
               <input type="checkbox" id="forceStandCheck" onchange="saveForceStand()">
               <span>连点左键自动按住站立键：</span>
             </label>
@@ -210,7 +226,7 @@
 
           <div class="pref-hud-section">
             <div class="pref-hud-header">
-              <label class="checkbox-label">
+              <label class="checkbox-label" title="在游戏画面上显示宏状态的小浮窗">
                 <input type="checkbox" id="hudEnabledCheck" onchange="saveHUDSettings()">
                 <span>在场游戏悬浮指示器</span>
               </label>
@@ -245,30 +261,31 @@
       <span class="status-val red" id="activeProfileText">配置 1</span>
     </div>
     <div class="status-item">
-      <span class="status-tag ready" id="macroStatusPill">● 宏已就绪 (前台生效)</span>
+      <span class="status-tag ready" id="macroStatusPill">· 正在读取状态…</span>
     </div>
     <div class="status-item">
       <span class="status-label">目标进程：</span>
-      <span class="status-val text-gray" id="targetProcessText">Diablo IV.exe</span>
+      <span class="status-val text-gray" id="targetProcessText">—</span>
     </div>
-    <div class="status-item text-green" id="autoSaveIndicator">✓ 实时生效</div>
+    <div class="status-item text-green" id="autoSaveIndicator">✓ 改动即时生效</div>
     <div class="footer-spacer"></div>
     <div class="footer-tech">Win32 SendInput · 零驱动零注入</div>
   </footer>
 
-  <!-- 按键录入浮层模态框 -->
-  <div class="capture-overlay" id="captureOverlay" style="display: none;" onclick="onOverlayClick(event)">
-    <div class="capture-box">
-      <div class="capture-title">请按下任意键盘按键，或快捷选取鼠标按键</div>
-      <div class="capture-mouse-options">
-        <button class="tool-btn" onclick="applyCapturedKey('LMB')">鼠标左键</button>
-        <button class="tool-btn" onclick="applyCapturedKey('RMB')">鼠标右键</button>
-        <button class="tool-btn" onclick="applyCapturedKey('MMB')">鼠标中键</button>
-        <button class="tool-btn" onclick="applyCapturedKey('X1')">侧键1 (X1)</button>
-        <button class="tool-btn" onclick="applyCapturedKey('X2')">侧键2 (X2)</button>
+  <!-- 按键录入浮层（内容由 JS 按捕获目标动态生成） -->
+  <div class="capture-overlay" id="captureOverlay" style="display: none;">
+    <div class="capture-box" id="captureBox"></div>
+  </div>
+
+  <!-- 分享码导入预览浮层 -->
+  <div class="capture-overlay" id="importOverlay" style="display: none;">
+    <div class="capture-box wide">
+      <div class="capture-title">导入分享码</div>
+      <pre class="import-preview" id="importPreview"></pre>
+      <div class="capture-actions">
+        <button class="tool-btn" onclick="confirmImport()">确认导入</button>
+        <button class="tool-btn" onclick="closeImport()">取消</button>
       </div>
-      <div class="capture-sub">（按 Escape 或点击背景取消）</div>
-      <div class="capture-pulse"></div>
     </div>
   </div>
 

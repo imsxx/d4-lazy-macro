@@ -3,9 +3,11 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/imsxx/diablo-lazy-macro/internal/config"
+	"github.com/imsxx/diablo-lazy-macro/internal/store"
 )
 
 func TestDefaultConfigHasFourProfiles(t *testing.T) {
@@ -204,5 +206,96 @@ func TestProfileModeDefaultsToConcurrent(t *testing.T) {
 	}
 	if parsed.Profiles[0].Mode != config.ModeConcurrent {
 		t.Fatalf("缺省模式应为并发，实际 %q", parsed.Profiles[0].Mode)
+	}
+}
+
+// 界面侧的夹取与上限必须落在协议允许范围内：
+// 越界的界面输入不再被写进配置，也就不会再出现「界面接受了、保存却整体失败」的静默失败。
+func TestUIClampLimitsWithinProtocol(t *testing.T) {
+	for _, delay := range []int{-maxDelayMSUI, maxDelayMSUI} {
+		slots := defaultSlots()
+		slots[0].Strategy = strategySpam
+		slots[0].IntervalMS = 20
+		slots[0].DelayMS = delay
+		prof := slotsToProfile(slots, "夹取上限", "", config.ModeConcurrent)
+		if _, err := config.Resolve(config.Raw{Version: config.Version, Profiles: []config.RawProfile{prof}}); err != nil {
+			t.Fatalf("延迟 %d 应当仍被协议接受：%v", delay, err)
+		}
+	}
+
+	if got := clampDelay(maxDelayMSUI + 1); got != maxDelayMSUI {
+		t.Fatalf("clampDelay 未夹取上限：%d", got)
+	}
+	if got := clampDelay(-maxDelayMSUI - 1); got != -maxDelayMSUI {
+		t.Fatalf("clampDelay 未夹取下限：%d", got)
+	}
+	if got := clampDelay(0); got != 0 {
+		t.Fatalf("clampDelay(0) 应为 0：%d", got)
+	}
+
+	if got := clampInterval(1, 300); got != 300 {
+		t.Fatalf("间隔低于下限应保持原值：%d", got)
+	}
+	if got := clampInterval(600001, 300); got != 600000 {
+		t.Fatalf("间隔上限未被夹取：%d", got)
+	}
+
+	name := strings.Repeat("名", maxNameRunesUI)
+	prof := slotsToProfile(defaultSlots(), name, "", config.ModeConcurrent)
+	if _, err := config.Resolve(config.Raw{Version: config.Version, Profiles: []config.RawProfile{prof}}); err != nil {
+		t.Fatalf("长度 %d 的配置名应当合法（说明界面上限未超过协议）：%v", maxNameRunesUI, err)
+	}
+	tooLong := strings.Repeat("名", maxNameRunesUI+1)
+	prof = slotsToProfile(defaultSlots(), tooLong, "", config.ModeConcurrent)
+	if _, err := config.Resolve(config.Raw{Version: config.Version, Profiles: []config.RawProfile{prof}}); err == nil {
+		t.Fatal("超出界面上限的配置名应被协议拒绝（说明界面上限落后于协议）")
+	}
+}
+
+// 快速暂停时长留空（0）在引擎里等于「暂停到手动恢复」，界面留空必须读作「沿用原值」。
+func TestNormalizeQuickPauseDelay(t *testing.T) {
+	prev := store.QuickPauseSettings{DelayMS: 1500}
+	if got := normalizeQuickPause(store.QuickPauseSettings{DelayMS: 0}, prev); got.DelayMS != 1500 {
+		t.Errorf("空时长应沿用原值，实际 %d", got.DelayMS)
+	}
+	if got := normalizeQuickPause(store.QuickPauseSettings{DelayMS: 0}, store.QuickPauseSettings{}); got.DelayMS != store.DefaultQuickPause().DelayMS {
+		t.Errorf("原值也缺失时应回落默认值，实际 %d", got.DelayMS)
+	}
+	if got := normalizeQuickPause(store.QuickPauseSettings{DelayMS: 2500}, prev); got.DelayMS != 2500 {
+		t.Errorf("正常时长应原样保留，实际 %d", got.DelayMS)
+	}
+}
+
+// 槽位键快照供 Buff 守卫在 tick 线程只读使用：必须与协议键名一一对应，非法键记为 0。
+func TestSlotVKsSnapshot(t *testing.T) {
+	slots := defaultSlots()
+	slots[0].Key = "LMB"
+	slots[1].Key = "0x0D"
+	slots[2].Key = "??"
+	vks := slotVKsOf(slots)
+	if vks[0] != 0x01 {
+		t.Errorf("LMB 应解析为 0x01，实际 0x%02X", vks[0])
+	}
+	if vks[1] != 0x0D {
+		t.Errorf("0x0D 应解析为 0x0D，实际 0x%02X", vks[1])
+	}
+	if vks[2] != 0 {
+		t.Errorf("非法键名应记为 0，实际 0x%02X", vks[2])
+	}
+	if vks[3] != uint16('4') {
+		t.Errorf("默认键「4」应解析为 '4'，实际 0x%02X", vks[3])
+	}
+}
+
+func TestSlotVKsFromRawFollowsProfiles(t *testing.T) {
+	raw := config.Raw{Version: config.Version, Profiles: []config.RawProfile{
+		{Name: "配置1", Rules: []config.RawRule{{Trigger: "t", Action: "tap:1", IntervalMS: 250}}},
+	}}
+	vks := slotVKsFromRaw(raw)
+	if vks[0][0] != uint16('1') {
+		t.Fatalf("首个方案的首槽位应为 1，实际 0x%02X", vks[0][0])
+	}
+	if vks[1][0] != 0 {
+		t.Fatalf("未提供的方案槽位应为空，实际 0x%02X", vks[1][0])
 	}
 }

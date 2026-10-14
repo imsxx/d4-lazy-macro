@@ -172,6 +172,32 @@ func (e *Engine) Paused() bool {
 	return e.paused
 }
 
+// RuntimeState 是引擎的开关/暂停态快照。
+// 界面在重建引擎（例如编辑规则）时用它继承玩家当前的运行态，
+// 避免「改一个槽位就把宏重新打开」或把暂停状态丢掉。
+type RuntimeState struct {
+	Enabled bool
+	Paused  bool
+}
+
+// RuntimeState 返回当前运行态。
+func (e *Engine) RuntimeState() RuntimeState {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return RuntimeState{Enabled: e.enabled, Paused: e.paused}
+}
+
+// ApplyRuntimeState 恢复运行态：paused 为 true 时保持暂停直到 Resume（等价「压住」触发的暂停语义）。
+func (e *Engine) ApplyRuntimeState(s RuntimeState) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.enabled = s.Enabled
+	e.paused = s.Paused
+	e.pauseUntil = time.Time{}
+	e.pauseClickVK = 0
+	e.pauseNextClick = time.Time{}
+}
+
 // tickPausedLocked 处理暂停期间的行为：释放按住中的键、按需连点、到期自动恢复。
 func (e *Engine) tickPausedLocked(now time.Time) {
 	// 暂停期间不能留着按住不放的键，否则技能会一直按着。

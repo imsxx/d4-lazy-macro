@@ -58,6 +58,9 @@ type runtimeSnapshot struct {
 	QuickPause    store.QuickPauseSettings
 	SmartPause    bool
 	Helpers       store.HelperSettings
+	// SlotVKs 是每个方案 6 个槽位的虚拟键码（0 表示空），由 UI 线程在提交配置时写入。
+	// Buff 守卫在 tick 线程按它定位槽位：只读快照，不再读界面控件状态（避免数据竞争）。
+	SlotVKs [maxProfiles][numSlots]uint16
 }
 
 // runtimeState 保存会被 UI 线程与 tick 线程并发访问的状态。
@@ -86,7 +89,7 @@ type app struct {
 	log  *logx.Logger
 	st   *runtimeState
 
-	win *mainWindow // 程序主窗口（可见）
+	win *mainWindow  // 程序主窗口（可见）
 	hud *floatingHUD // 游戏悬浮状态窗（置顶 Mini HUD）
 
 	settings *store.Settings // 仅 UI 线程访问
@@ -484,12 +487,17 @@ func (a *app) rebuildMenu() error {
 
 	importAct := walk.NewAction()
 	check(importAct.SetText("从剪贴板导入分享码…"))
-	importAct.Triggered().Attach(a.importFromClipboard)
+	// walk 的 Triggered 只接受无参函数，这里包装一次（导入返回是否真正应用，供托盘提示用）。
+	importAct.Triggered().Attach(func() { a.importFromClipboard() })
 	check(menu.Actions().Add(importAct))
 
 	exportAct := walk.NewAction()
 	check(exportAct.SetText("复制当前分享码"))
-	exportAct.Triggered().Attach(a.exportToClipboard)
+	exportAct.Triggered().Attach(func() {
+		if err := a.exportToClipboard(); err != nil {
+			walk.MsgBox(a.owner(), appName, "生成分享码失败：\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
+		}
+	})
 	check(menu.Actions().Add(exportAct))
 
 	logAct := walk.NewAction()
@@ -560,7 +568,8 @@ func (a *app) refreshUI() {
 		a.win.refreshStatus()
 	}
 	if a.hud != nil {
-		a.hud.update(snap, a.hud.foreground)
+		// 用带锁的访问器读前台态：该字段由 tick 线程写入，直接读会形成数据竞争。
+		a.hud.update(snap, a.hud.isForeground())
 	}
 }
 
@@ -591,7 +600,7 @@ func setActionChecked(act *walk.Action, checked bool) {
 func (a *app) toggleFromUI() {
 	snap := a.st.snapshot()
 	if snap.Engine == nil {
-		walk.MsgBox(a.owner(), appName, "当前游戏还没有配置。\n\n在主窗口里编辑规则并「保存并应用」，或从剪贴板导入分享码。",
+		walk.MsgBox(a.owner(), appName, "当前游戏还没有配置。\n\n在主窗口里编辑规则（改动即时生效），或从剪贴板导入分享码。",
 			walk.MsgBoxOK|walk.MsgBoxIconInformation)
 		return
 	}
@@ -599,17 +608,17 @@ func (a *app) toggleFromUI() {
 	a.refreshUI()
 }
 
-func (a *app) importFromClipboard() {
+// previewImportFromClipboard 读取剪贴板里的分享码并校验，返回给人看的预览文本。
+// 不产生任何副作用：确认与应用交给调用方（界面用两步弹层，托盘用原生确认框）。
+func (a *app) previewImportFromClipboard() (config.Raw, *config.Parsed, string, error) {
 	text, err := walk.Clipboard().Text()
 	if err != nil {
-		walk.MsgBox(a.owner(), appName, "读取剪贴板失败：\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
-		return
+		return config.Raw{}, nil, "", fmt.Errorf("读取剪贴板失败：%v", err)
 	}
 	raw, parsed, err := config.Decode(text)
 	if err != nil {
 		a.log.Printf("[导入] 分享码无效：%v", err)
-		walk.MsgBox(a.owner(), appName, "分享码无效：\n\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
-		return
+		return config.Raw{}, nil, "", fmt.Errorf("分享码无效：%v", err)
 	}
 
 	var sb strings.Builder
@@ -625,37 +634,68 @@ func (a *app) importFromClipboard() {
 			sb.WriteString("· " + w + "\n")
 		}
 	}
-	if walk.MsgBox(a.owner(), "导入分享码", sb.String(), walk.MsgBoxYesNo|walk.MsgBoxIconInformation) != walk.DlgCmdYes {
-		return
-	}
-	// 确保导入的配置具备 4 个完整方案
-	for len(raw.Profiles) < 4 {
+	return *raw, parsed, sb.String(), nil
+}
+
+// applyImport 应用一份已确认的导入配置：补齐 4 套方案、校验、按「启用」重建引擎。
+func (a *app) applyImport(raw config.Raw, parsed *config.Parsed) error {
+	for len(raw.Profiles) < maxProfiles {
 		idx := len(raw.Profiles)
 		raw.Profiles = append(raw.Profiles, config.RawProfile{
 			Name:  fmt.Sprintf("配置 %d", idx+1),
 			Rules: []config.RawRule{{Trigger: "t", Action: "tap:1", IntervalMS: 250}},
 		})
 	}
-	parsed, err = config.Resolve(*raw)
+	resolved, err := config.Resolve(raw)
 	if err != nil {
-		walk.MsgBox(a.owner(), appName, "配置校验失败：\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
-		return
+		return fmt.Errorf("配置校验失败：%v", err)
 	}
-
 	startMode := a.st.snapshot().StartMode
-	if err := a.applyConfig(raw, parsed, 0, startMode); err != nil {
+	// 导入是玩家的显式动作：与旧行为一致，导入后宏处于启用状态。
+	if err := a.applyConfig(&raw, resolved, applyOptions{
+		ProfileIdx: 0,
+		StartMode:  startMode,
+		Inherit:    &engine.RuntimeState{Enabled: true},
+	}); err != nil {
 		a.log.Printf("[导入] 应用失败：%v", err)
-		walk.MsgBox(a.owner(), appName, "应用配置失败：\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
-		return
+		return fmt.Errorf("应用配置失败：%v", err)
 	}
 	if a.ni != nil {
-		if err := a.ni.ShowInfo(appName, "配置已应用。\n进入游戏后按 "+keyName(parsed.ToggleVK)+" 启用宏。"); err != nil {
+		if err := a.ni.ShowInfo(appName, "配置已应用。\n进入游戏后按 "+keyName(resolved.ToggleVK)+" 启用宏。"); err != nil {
 			a.log.Printf("[托盘] 气泡提示失败：%v", err)
 		}
 	}
+	return nil
 }
 
-func (a *app) applyConfig(raw *config.Raw, parsed *config.Parsed, profileIdx int, startMode int) error {
+// importFromClipboard 是托盘入口：预览 + 原生确认框 + 应用；返回是否真正应用了配置。
+func (a *app) importFromClipboard() bool {
+	raw, parsed, preview, err := a.previewImportFromClipboard()
+	if err != nil {
+		walk.MsgBox(a.owner(), appName, err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
+		return false
+	}
+	if walk.MsgBox(a.owner(), "导入分享码", preview, walk.MsgBoxYesNo|walk.MsgBoxIconInformation) != walk.DlgCmdYes {
+		return false
+	}
+	if err := a.applyImport(raw, parsed); err != nil {
+		walk.MsgBox(a.owner(), appName, err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
+		return false
+	}
+	return true
+}
+
+// applyOptions 是应用配置时的可选项。
+type applyOptions struct {
+	ProfileIdx int                            // 激活的方案序号
+	StartMode  int                            // 启动方式：0 懒人（开关切换）/ 1 仅按下时（按住生效）
+	Inherit    *engine.RuntimeState           // 新引擎继承的运行态；nil 表示继承当前引擎
+	SlotVKs    *[maxProfiles][numSlots]uint16 // 槽位键快照；nil 表示按存档规则推导
+	// SkipUIReload 跳过「从存档反推界面槽位表」：界面自己发起的提交不该被反推覆盖（会打乱槽位顺序）。
+	SkipUIReload bool
+}
+
+func (a *app) applyConfig(raw *config.Raw, parsed *config.Parsed, opts applyOptions) error {
 	gameID := a.settings.CurrentGame
 	if raw.Game == "" {
 		raw.Game = gameID
@@ -664,24 +704,41 @@ func (a *app) applyConfig(raw *config.Raw, parsed *config.Parsed, profileIdx int
 	if err != nil {
 		return err
 	}
+	old := a.st.snapshot()
+
 	eng, err := engine.New(winSender{}, winKeyState{}, parsed, a.notifyEngineError)
 	if err != nil {
 		return err
 	}
 	a.setupBuffChecker(eng)
 	a.setupForceStand(eng)
-	if err := eng.SetProfile(profileIdx); err != nil {
+	if err := eng.SetProfile(opts.ProfileIdx); err != nil {
 		return err
 	}
-	eng.SetEnabled(true)
+	// 继承运行态：编辑规则不该顺手把宏打开或关掉，也不该丢掉暂停状态。
+	runtime := engine.RuntimeState{Enabled: true}
+	if old.Engine != nil {
+		runtime = old.Engine.RuntimeState()
+	}
+	if opts.Inherit != nil {
+		runtime = *opts.Inherit
+	}
+	eng.ApplyRuntimeState(runtime)
+
 	if err := store.Save(a.dir, store.ConfigFile(gameID), store.Snapshot{
 		Config:     *raw,
-		ProfileIdx: profileIdx,
-		StartMode:  startMode,
+		ProfileIdx: opts.ProfileIdx,
+		StartMode:  opts.StartMode,
 	}); err != nil {
 		return err
 	}
-	if old := a.st.snapshot(); old.Engine != nil {
+
+	slotVKs := slotVKsFromRaw(*raw)
+	if opts.SlotVKs != nil {
+		slotVKs = *opts.SlotVKs
+	}
+
+	if old.Engine != nil {
 		old.Engine.SetEnabled(false)
 		old.Engine.ReleaseAll()
 	}
@@ -691,15 +748,19 @@ func (a *app) applyConfig(raw *config.Raw, parsed *config.Parsed, profileIdx int
 		ToggleVK:      parsed.ToggleVK,
 		GameID:        gameID,
 		TargetProcess: target,
-		StartMode:     startMode,
+		StartMode:     opts.StartMode,
 		QuickPause:    a.settings.QuickPause,
 		SmartPause:    a.settings.SmartPause,
 		Helpers:       a.settings.Helpers,
+		SlotVKs:       slotVKs,
 	})
 	if err := a.rebuildMenu(); err != nil {
 		a.log.Printf("[错误] 重建菜单失败：%v", err)
 	}
-	a.afterStateChange()
+	a.refreshUI()
+	if !opts.SkipUIReload && a.win != nil {
+		a.win.loadFromState()
+	}
 	a.log.Printf("已应用 %s 配置：%s（%d 个方案，启停键 %s）", gameDisplayName(gameID), raw.Name, len(parsed.Profiles), keyName(parsed.ToggleVK))
 	return nil
 }
@@ -731,21 +792,19 @@ func (a *app) switchProfile(i int) {
 	a.log.Printf("[切换] 方案 → %s", profileDisplayName(snap.Engine, i))
 }
 
-func (a *app) exportToClipboard() {
+// exportToClipboard 把当前配置编码成分享码并写入剪贴板。
+// 只返回错误，不弹窗：错误怎么展示由调用方决定（托盘用 MsgBox，界面用提示条）。
+func (a *app) exportToClipboard() error {
 	snap := a.st.snapshot()
 	if snap.Raw == nil {
-		walk.MsgBox(a.owner(), appName, "当前游戏还没有配置可导出。\n\n在主窗口里编辑规则并「保存并应用」，或从剪贴板导入一段分享码。",
-			walk.MsgBoxOK|walk.MsgBoxIconInformation)
-		return
+		return fmt.Errorf("当前游戏还没有配置可导出：先编辑规则或导入一段分享码")
 	}
 	code, err := config.Encode(*snap.Raw)
 	if err != nil {
-		walk.MsgBox(a.owner(), appName, "生成分享码失败：\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
-		return
+		return fmt.Errorf("生成分享码失败：%v", err)
 	}
 	if err := walk.Clipboard().SetText(code); err != nil {
-		walk.MsgBox(a.owner(), appName, "写入剪贴板失败：\n"+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
-		return
+		return fmt.Errorf("写入剪贴板失败：%v", err)
 	}
 	a.log.Printf("[导出] 分享码已复制（%d 字符，%s）", len(code), gameDisplayName(snap.GameID))
 	if a.ni != nil {
@@ -753,6 +812,7 @@ func (a *app) exportToClipboard() {
 			a.log.Printf("[托盘] 气泡提示失败：%v", err)
 		}
 	}
+	return nil
 }
 
 func (a *app) openDataDir() {
@@ -1154,16 +1214,14 @@ func (a *app) setupBuffChecker(eng *engine.Engine) {
 		if !win32.MatchProcess(fg.ProcessName, snap.TargetProcess) {
 			return false
 		}
-		if a.win == nil {
-			return false
-		}
 		profIdx := eng.ProfileIndex()
 		if profIdx < 0 || profIdx >= maxProfiles {
 			return false
 		}
+		// 只读运行期快照里的槽位键：不再读界面控件状态（那是 UI 线程的数据，会在 tick 线程形成竞争）。
 		slotIdx := -1
 		for s := 0; s < numSlots; s++ {
-			if parsedVK, err := keys.Parse(a.win.profileSlots[profIdx][s].Key); err == nil && parsedVK == vk {
+			if snap.SlotVKs[profIdx][s] != 0 && snap.SlotVKs[profIdx][s] == vk {
 				slotIdx = s
 				break
 			}
@@ -1246,6 +1304,12 @@ func (a *app) targetProcessOf(gameID string) string {
 	return p
 }
 
+// gameInForeground 判断目标游戏当前是否在前台（供界面状态展示使用）。
+func (a *app) gameInForeground(snap runtimeSnapshot) bool {
+	fg, err := win32.GetForegroundWindow()
+	return err == nil && win32.MatchProcess(fg.ProcessName, snap.TargetProcess)
+}
+
 func (a *app) describeConfig(raw *config.Raw, parsed *config.Parsed) string {
 	var sb strings.Builder
 	if parsed.Game != "" {
@@ -1295,34 +1359,6 @@ func describeRule(r config.ParsedRule) string {
 		return fmt.Sprintf("%s，保持按住 %s 不放", trigger, keyName(r.Keys[0]))
 	}
 	panic("未知动作类型：" + string(r.Kind))
-}
-
-// describeRawRule 是主窗口中使用的宽容版描述：字段可能尚未填好，不做校验。
-func describeRawRule(r config.RawRule) string {
-	trigger := "宏开启期间"
-	if strings.HasPrefix(r.Trigger, "h:") {
-		trigger = "按住 " + keyNameOfToken(strings.TrimPrefix(r.Trigger, "h:")) + " 时"
-	}
-	detail := r.Action
-	if kind, arg, ok := strings.Cut(r.Action, ":"); ok {
-		switch kind {
-		case "tap":
-			detail = "连点 " + keyNameOfToken(arg)
-		case "seq":
-			detail = "序列 " + keySequenceNames(arg)
-		case "once":
-			detail = "单点 " + keyNameOfToken(arg)
-		case "hold":
-			detail = "按住不放 " + keyNameOfToken(arg)
-		}
-	}
-	if detail == "" {
-		detail = "（未设置动作）"
-	}
-	if r.IntervalMS > 0 {
-		return fmt.Sprintf("%s · %s · 每 %s", trigger, detail, durationText(r.IntervalMS))
-	}
-	return fmt.Sprintf("%s · %s", trigger, detail)
 }
 
 func durationText(ms int) string {
